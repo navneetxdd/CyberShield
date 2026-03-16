@@ -29,7 +29,7 @@ python -m pytest tests/ -v
 
 ## Core modules
 
-- Vehicle counting and classification with `YOLOv8` object detection plus `ByteTrack` tracking
+- Vehicle counting and classification with `YOLO11s` object detection plus `ByteTrack` tracking
 - Automatic number plate recognition with a dedicated `YOLOv8` plate detector, local `PaddleOCR` as the primary OCR engine, `EasyOCR` fallback for uncertain reads, and optional cloud fallback
 - Facial recognition, gender analytics, and age estimation with `InsightFace` (`buffalo_l`)
 - People counting and crowd density estimation
@@ -38,8 +38,8 @@ python -m pytest tests/ -v
 
 ## Runtime behavior
 
-- On CPU, the primary detector defaults to `yolov8s.pt`.
-- On CUDA-enabled systems, the detector defaults to `yolov8m.pt`.
+- The primary detector defaults to `yolo11s.pt` on both CPU and CUDA systems.
+- You can override the detector via `CYBERSHIELD_DETECT_MODEL`.
 - The first run downloads detector weights, InsightFace assets, and OCR assets automatically.
 - Plate detection uses `https://huggingface.co/yasirfaizahmed/license-plate-object-detection/resolve/main/best.pt` by default and can be overridden with `CYBERSHIELD_PLATE_MODEL`.
 - The ANPR pipeline runs local OCR first (`PaddleOCR` primary, `EasyOCR` fallback), then uses cloud OCR only when local OCR cannot produce a valid plate.

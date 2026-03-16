@@ -7,7 +7,7 @@ from camera import CameraStream
 
 
 def _write_test_video(video_path: Path) -> None:
-    fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    fourcc = cv2.VideoWriter.fourcc(*"MJPG")
     writer = cv2.VideoWriter(str(video_path), fourcc, 5.0, (32, 32))
     assert writer.isOpened()
 

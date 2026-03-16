@@ -1,4 +1,4 @@
-# CyberShield — Integrated AI Video Analytics
+# CyberShield — Integrated AI Video Analytics Platform
 
 CyberShield is a production-grade AI video analytics platform that turns any IP camera or video file into an intelligent surveillance feed. It combines vehicle detection, automatic number plate recognition (ANPR), facial recognition, watchlist alerting, and real-time operator dashboarding in a single deployable FastAPI application.
 
@@ -28,7 +28,7 @@ CyberShield is a production-grade AI video analytics platform that turns any IP 
 
 CyberShield ingests live camera streams or uploaded video files and runs a multi-stage AI pipeline on each frame:
 
-- Detects and tracks every vehicle and person using **YOLOv8 + ByteTrack**
+- Detects and tracks every vehicle and person using **YOLO11s + ByteTrack**
 - Extracts and reads licence plates through a three-tier OCR stack — **PaddleOCR → EasyOCR → optional cloud OCR**
 - Recognises faces, estimates age and gender, and matches against a managed **watchlist** using **InsightFace**
 - Persists all events, plates, vehicles, and face records to a local **SQLite** database
@@ -42,13 +42,13 @@ Everything runs locally with no mandatory cloud dependencies. Cloud ANPR enrichm
 ## Key Features
 
 ### Vehicle Intelligence
-- YOLOv8 object detection (car, motorcycle, bus, truck, person)
+- YOLO11s object detection (car, motorcycle, bus, truck, person)
 - ByteTrack multi-object tracking with unique track IDs
 - Vehicle counting, class breakdown, and occupancy metrics
 - Per-vehicle plate association with confidence score
 
 ### ANPR (Automatic Number Plate Recognition)
-- Dedicated YOLOv8 plate detector for plate bounding-box extraction
+- Dedicated YOLOv8 plate detector (fine-tuned `best.pt`) for plate bounding-box extraction
 - Three-tier OCR stack with automatic per-frame fallback:
   - **Tier 1** — PaddleOCR (primary, fastest)
   - **Tier 2** — EasyOCR (fallback for low-confidence Paddle reads)
@@ -97,7 +97,7 @@ Everything runs locally with no mandatory cloud dependencies. Cloud ANPR enrichm
 │                 ┌────────────────▼─────────────────────────┐│
 │                 │           VideoPipeline (pipeline.py)     ││
 │                 │                                           ││
-│                 │  ①  YOLOv8 detection (vehicles/people)   ││
+│                 │  ①  YOLO11s detection (vehicles/people)  ││
 │                 │  ②  ByteTrack multi-object tracking      ││
 │                 │  ③  Plate detector (YOLOv8 crop)        ││
 │                 │       └─ PaddleOCR                       ││
@@ -132,9 +132,9 @@ Everything runs locally with no mandatory cloud dependencies. Cloud ANPR enrichm
 ### Data Flow
 
 1. **Ingest** — `CameraRuntime` opens an OpenCV `VideoCapture` on the camera URL or uploaded file and pushes decoded frames into a bounded queue.
-2. **Detect** — `VideoPipeline` runs YOLOv8 inference on each frame producing bounding boxes and class labels.
+2. **Detect** — `VideoPipeline` runs YOLO11s inference on each frame producing bounding boxes and class labels.
 3. **Track** — ByteTrack assigns a stable integer track ID to each detection across frames.
-4. **ANPR** — For every vehicle track, a secondary YOLOv8 plate detector crops the plate region. The crop is passed through the OCR stack. Each OCR result is validated (`normalize_plate_text`) and entered into a per-tracker vote dictionary. A plate is confirmed only when `_is_plate_vote_confirmed()` is satisfied.
+4. **ANPR** — For every vehicle track, a secondary fine-tuned YOLOv8 plate detector crops the plate region. The crop is passed through the OCR stack. Each OCR result is validated (`normalize_plate_text`) and entered into a per-tracker vote dictionary. A plate is confirmed only when `_is_plate_vote_confirmed()` is satisfied.
 5. **Face** — InsightFace extracts 512-d embeddings from every detected face. Cosine similarity is computed against all watchlist embeddings. Hits are flagged and logged as events.
 6. **Persist** — Confirmed plates, vehicles, faces, and system events are written to `analytics.db` via `database.py`.
 7. **Stream** — Annotated frames are JPEG-encoded and emitted on an MJPEG endpoint. Live state (recent vehicles, plates, faces, incidents) is broadcast over a WebSocket.
@@ -147,7 +147,7 @@ Everything runs locally with no mandatory cloud dependencies. Cloud ANPR enrichm
 | Component | Technology |
 |---|---|
 | Web framework | FastAPI + Uvicorn |
-| Object detection | YOLOv8 (Ultralytics) |
+| Object detection | YOLO11s (Ultralytics) |
 | Multi-object tracking | ByteTrack (via Supervision) |
 | Plate detection | YOLOv8 fine-tuned on licence plates |
 | Primary OCR | PaddleOCR |
@@ -222,12 +222,12 @@ The server binds to `0.0.0.0:8080` by default.
 
 ### First Run
 
-On the first run the following assets are downloaded automatically:
+On the first run the following assets are downloaded automatically if missing:
 
 | Asset | Source |
 |---|---|
-| `yolov8s.pt` / `yolov8m.pt` | Ultralytics (CUDA → m, CPU → s) |
-| Plate detection model `best.pt` | Hugging Face (yasirfaizahmed) |
+| `yolo11s.pt` | Ultralytics |
+| Plate detection model `best.pt` (if missing locally) | Hugging Face (yasirfaizahmed) |
 | InsightFace `buffalo_l` | InsightFace model zoo |
 | PaddleOCR recognition weights | PaddlePaddle CDN |
 | EasyOCR recognition weights | GitHub release |
@@ -250,7 +250,7 @@ All configuration is via environment variables. None are required — the system
 |---|---|---|
 | `CYBERSHIELD_DETECT_MODEL` | auto | Override the primary YOLO detector path or model name |
 | `CYBERSHIELD_PLATE_MODEL` | HuggingFace URL | Override the plate detector path or URL |
-| `CYBERSHIELD_DETECT_IMGSZ` | `640` | Detector inference image size |
+| `CYBERSHIELD_DETECT_IMGSZ` | `896` | Detector inference image size |
 | `CYBERSHIELD_MAX_UPLOAD_SIZE` | `512MB` | Maximum upload file size (e.g. `1GB`) |
 | `CYBERSHIELD_ALLOWED_ORIGINS` | `*` | Comma-separated CORS allowed origins |
 
@@ -260,7 +260,7 @@ All configuration is via environment variables. None are required — the system
 |---|---|---|
 | `CYBERSHIELD_ENABLE_PADDLE_OCR` | `true` | Enable PaddleOCR primary path |
 | `CYBERSHIELD_ENABLE_EASYOCR_FALLBACK` | `true` | Enable EasyOCR fallback path |
-| `CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE` | `0.80` | Minimum confidence to accept a PaddleOCR result directly without fallback |
+| `CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE` | `0.75` | Minimum confidence to accept a PaddleOCR result directly without fallback |
 | `CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE` | `0.78` | Hard floor on cloud OCR confidence — results below this are discarded |
 | `PLATE_RECOGNIZER_API_TOKEN` | _(unset)_ | Enables cloud OCR via Plate Recognizer; leave unset to run local-only |
 
@@ -268,8 +268,18 @@ All configuration is via environment variables. None are required — the system
 
 | Variable | Default | Description |
 |---|---|---|
-| `CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD` | `0.25` | ByteTrack activation confidence threshold |
-| `CYBERSHIELD_TRACK_MATCHING_THRESHOLD` | `0.8` | ByteTrack IoU matching threshold |
+| `CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD` | `0.13` | ByteTrack activation confidence threshold |
+| `CYBERSHIELD_TRACK_MATCHING_THRESHOLD` | `0.65` | ByteTrack IoU matching threshold |
+| `CYBERSHIELD_TRACK_LOST_BUFFER` | `60` | Frames to keep lost tracks before dropping |
+| `CYBERSHIELD_TRACK_FRAME_RATE` | `8` (CPU), `12` (GPU) | Tracker frame-rate hint |
+
+### Throughput Targets
+
+| Variable | Default |
+|---|---|
+| `CYBERSHIELD_STREAM_MAX_FPS` | `14` (CPU), `24` (GPU) |
+| `CYBERSHIELD_ANALYTICS_FPS` | `8` (CPU), `10` (GPU) |
+| `CYBERSHIELD_TASK_REFRESH_FPS` | `6` (CPU), `10` (GPU) |
 
 ---
 
@@ -317,7 +327,7 @@ Each record tab has live filter controls that query the database in real time:
 Frame
   │
   ▼
-Plate detector (YOLOv8)
+Plate detector (YOLOv8 fine-tuned)
   │ crop
   ▼
 normalize_plate_text() ──── invalid → discard
@@ -388,7 +398,9 @@ CyberShield/
     ├── camera.py                   ← camera utilities
     ├── requirements.txt
     ├── analytics.db                ← SQLite database (auto-created)
-    ├── yolov8s.pt                  ← YOLO weights (auto-downloaded)
+    ├── yolo11s.pt                  ← primary detector weights
+    ├── weights/
+    │   └── best.pt                 ← plate detector weights
     ├── templates/
     │   └── index.html              ← single-page operator dashboard
     ├── uploads/                    ← uploaded video files

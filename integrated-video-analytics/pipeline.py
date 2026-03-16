@@ -83,7 +83,7 @@ def normalize_plate_text(text: str) -> Optional[str]:
 
 
 def detector_fallback_name() -> str:
-    return "yolov8m.pt" if torch.cuda.is_available() else "yolov8s.pt"
+    return "yolo11s.pt" if torch.cuda.is_available() else "yolo11s.pt"
 
 
 def read_env_float(
@@ -161,11 +161,11 @@ def trim_timestamp_cache(
         cache.pop(oldest_key, None)
 
 
-DETECTION_CONFIDENCE = read_env_float("CYBERSHIELD_DETECT_CONFIDENCE", 0.30, minimum=0.05, maximum=0.95)
+DETECTION_CONFIDENCE = read_env_float("CYBERSHIELD_DETECT_CONFIDENCE", 0.15, minimum=0.05, maximum=0.95)
 PLATE_CONFIDENCE = read_env_float("CYBERSHIELD_PLATE_CONFIDENCE", 0.25, minimum=0.05, maximum=0.95)
 DETECTION_IMAGE_SIZE = read_env_int(
     "CYBERSHIELD_DETECT_IMGSZ",
-    896 if torch.cuda.is_available() else 736,
+    896,
     minimum=320,
     maximum=1600,
 )
@@ -211,10 +211,10 @@ DB_QUEUE_LIMIT = read_env_int("CYBERSHIELD_DB_QUEUE_LIMIT", 256, minimum=8, maxi
 UNIQUE_CACHE_TTL_SECONDS = read_env_float("CYBERSHIELD_UNIQUE_CACHE_TTL", 3600.0, minimum=60.0)
 PLATE_CACHE_LIMIT = read_env_int("CYBERSHIELD_PLATE_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
 FACE_TRACK_CACHE_LIMIT = read_env_int("CYBERSHIELD_FACE_TRACK_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
-TRACK_ACTIVATION_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD", 0.18, minimum=0.05, maximum=0.9)
-TRACK_MATCHING_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_MATCHING_THRESHOLD", 0.72, minimum=0.3, maximum=0.95)
-TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 45, minimum=5, maximum=180)
-TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda.is_available() else 6, minimum=1, maximum=60)
+TRACK_ACTIVATION_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD", 0.13, minimum=0.05, maximum=0.9)
+TRACK_MATCHING_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_MATCHING_THRESHOLD", 0.65, minimum=0.3, maximum=0.95)
+TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 60, minimum=5, maximum=180)
+TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda.is_available() else 8, minimum=1, maximum=60)
 TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 1, minimum=1, maximum=8)
 PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 300.0, minimum=10.0)
 PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.75, minimum=0.1, maximum=0.99)
@@ -229,7 +229,6 @@ PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "").strip()
 DETECTION_MODEL_NAME = resolve_model_path(
     os.getenv("CYBERSHIELD_DETECT_MODEL"),
     BASE_DIR / detector_fallback_name(),
-    BASE_DIR / "yolov8n.pt",
     fallback=detector_fallback_name(),
 )
 PLATE_MODEL_NAME = resolve_model_path(

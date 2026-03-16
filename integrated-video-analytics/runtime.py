@@ -19,10 +19,10 @@ MAX_OUTPUT_FPS = float(os.getenv("CYBERSHIELD_STREAM_MAX_FPS", DEFAULT_STREAM_FP
 JPEG_QUALITY = int(os.getenv("CYBERSHIELD_STREAM_JPEG_QUALITY", DEFAULT_JPEG_QUALITY))
 MAX_STREAM_WIDTH = int(os.getenv("CYBERSHIELD_STREAM_MAX_WIDTH", DEFAULT_STREAM_WIDTH))
 ANALYTICS_FPS = float(
-    os.getenv("CYBERSHIELD_ANALYTICS_FPS", "10" if VideoPipeline.gpu_available() else "4")
+    os.getenv("CYBERSHIELD_ANALYTICS_FPS", "10" if VideoPipeline.gpu_available() else "8")
 )
 TASK_REFRESH_FPS = float(
-    os.getenv("CYBERSHIELD_TASK_REFRESH_FPS", "10" if VideoPipeline.gpu_available() else "5")
+    os.getenv("CYBERSHIELD_TASK_REFRESH_FPS", "10" if VideoPipeline.gpu_available() else "6")
 )
 
 

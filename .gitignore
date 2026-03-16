@@ -13,6 +13,9 @@ openalpr-master/
 video-analyzer-main/
 yolov5-master/
 
+# Local working documents (not for repo)
+PROJECT_OVERVIEW.md
+
 # Docs and large files
 ai-facial-recognition.pdf
 *.mp4
