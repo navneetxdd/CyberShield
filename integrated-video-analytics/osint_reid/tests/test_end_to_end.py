@@ -78,6 +78,7 @@ def test_osint_end_to_end(monkeypatch, tmp_path):
         assert any(row["tracklet_id"] == "cam_a:1:person" for row in records)
 
 
+@pytest.mark.slow
 def test_sahi_rtdetr_script_behavior():
     repo_root = Path(__file__).resolve().parents[2]
     script = repo_root / "osint_reid" / "sahi_rtdetr_test.py"
@@ -88,5 +89,3 @@ def test_sahi_rtdetr_script_behavior():
             "SAHI/RT-DETR validation failed. Install dependencies with: pip install sahi ultralytics. Details: " + message
         )
 
-
-test_sahi_rtdetr_script_behavior = pytest.mark.slow(test_sahi_rtdetr_script_behavior)

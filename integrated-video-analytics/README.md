@@ -2,6 +2,12 @@
 
 Full documentation, setup instructions, system architecture, and API reference are maintained in the [root README](../README.md).
 
+## Latest session note
+
+Recent implementation updates include React frontend integration under `frontend/`, backend static serving from `static_ui/`, API wiring cleanup, OCR/ReID/runtime hardening, and frontend build/type compatibility fixes.
+
+For a comprehensive verified implementation ledger (including backend, frontend, dependency, build, and test details), see [context.md](../context.md).
+
 ## Quick start (from repo root)
 
 ```bash

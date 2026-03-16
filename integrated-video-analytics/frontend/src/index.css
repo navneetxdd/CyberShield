@@ -1,0 +1,220 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 2%;
+    --foreground: 240 5% 85%;
+    --card: 228 12% 8%;
+    --card-foreground: 240 5% 90%;
+    --popover: 228 12% 8%;
+    --popover-foreground: 240 5% 90%;
+    --primary: 45 93% 47%; /* Tactical Gold */
+    --primary-foreground: 240 6% 4%;
+    --secondary: 199 89% 60%; /* System Cyan */
+    --secondary-foreground: 240 6% 4%;
+    --muted: 240 4% 16%;
+    --muted-foreground: 240 5% 55%;
+    --accent: 45 93% 47%;
+    --accent-foreground: 240 6% 4%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 18%;
+    --input: 240 4% 18%;
+    --ring: 45 93% 47%;
+    --radius: 0rem; /* Industrial sharp corners */
+    --status-online: 142 71% 45%;
+    --status-recording: 0 84% 60%;
+    --status-warning: 45 93% 47%;
+    --status-alert: 0 84% 60%;
+    --panel: 228 12% 6%;
+    --panel-foreground: 240 5% 85%;
+    --surface: 240 10% 4%;
+    --sidebar-background: 228 12% 6%;
+    --sidebar-foreground: 240 5% 85%;
+    --sidebar-primary: 45 93% 47%;
+    --sidebar-primary-foreground: 240 6% 4%;
+    --sidebar-accent: 199 89% 60%;
+    --sidebar-accent-foreground: 240 6% 4%;
+    --sidebar-border: 240 4% 18%;
+    --sidebar-ring: 45 93% 47%;
+    
+    /* Forensic Custom Colors */
+    --tactical-gold: 45 93% 47%;
+    --tactical-cyan: 199 89% 60%;
+    --tactical-red: 0 84% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted));
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--primary) / 0.5);
+  }
+}
+
+@layer utilities {
+  .font-mono-tactical {
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .font-sans-tactical {
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+  .text-tactical {
+    @apply text-[10px] uppercase tracking-[0.15em] font-mono-tactical;
+  }
+  .text-tactical-lg {
+    @apply text-[11px] uppercase tracking-[0.1em] font-mono-tactical font-bold;
+  }
+  .glow-cyan {
+    filter: drop-shadow(0 0 3px hsl(var(--tactical-cyan) / 0.8));
+  }
+  .glow-gold {
+    filter: drop-shadow(0 0 3px hsl(var(--tactical-gold) / 0.8));
+  }
+  .glow-red {
+    filter: drop-shadow(0 0 4px hsl(var(--tactical-red) / 0.9));
+  }
+  .glass-elite {
+    @apply bg-panel/60 backdrop-blur-xl border border-white/5;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .scanline-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%,
+      rgba(0, 0, 0, 0.1) 50%
+    ), linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.03),
+      rgba(0, 255, 0, 0.01),
+      rgba(0, 0, 255, 0.03)
+    );
+    background-size: 100% 3px, 3px 100%;
+    z-index: 1000;
+    pointer-events: none;
+    opacity: 0.4;
+  }
+  .digital-noise {
+    position: fixed;
+    top: -50%;
+    left: -50%;
+    right: -50%;
+    bottom: -50%;
+    width: 200%;
+    height: 200%;
+    background: transparent url('http://assets.iceablethemes.com/img/noise-transparent.png') repeat 0 0;
+    background-repeat: repeat;
+    animation: shift 0.2s infinite;
+    opacity: .04;
+    visibility: visible;
+    z-index: 1001;
+    pointer-events: none;
+  }
+}
+
+@keyframes shift {
+    0% { transform: translateX(10px) translateY(10px); }
+    50% { transform: translateX(-10px) translateY(-10px); }
+    100% { transform: translateX(10px) translateY(10px); }
+}
+
+/* Animations */
+@keyframes scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(500%); }
+}
+@keyframes pulse-bracket {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+@keyframes data-stream {
+  0% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+  100% { opacity: 0.3; }
+}
+@keyframes alert-slide-in {
+  0% { transform: translateX(100%); opacity: 0; }
+  10% { transform: translateX(0); opacity: 1; }
+  90% { transform: translateX(0); opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+@keyframes alert-border-flash {
+  0%, 100% { border-color: hsl(var(--primary) / 0.3); }
+  50% { border-color: hsl(var(--primary)); }
+}
+@keyframes detection-appear {
+  0% { opacity: 0; transform: scale(1.2); }
+  50% { opacity: 1; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes card-slide-in {
+  0% { opacity: 0; transform: translateY(-8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+@keyframes strobe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+@keyframes typing {
+  from { width: 0; }
+  to { width: 100%; }
+}
+@keyframes blink-caret {
+  from, to { border-color: transparent; }
+  50% { border-color: hsl(var(--primary)); }
+}
+@keyframes glitch-h {
+  0% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-1px); }
+  80% { transform: translateX(1px); }
+  100% { transform: translateX(0); }
+}
+@keyframes threat-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 hsl(var(--status-alert) / 0.4); }
+  50% { box-shadow: 0 0 12px 2px hsl(var(--status-alert) / 0.2); }
+}
+@keyframes horizontal-scan {
+  0% { left: -20%; }
+  100% { left: 120%; }
+}
+
+.animate-scan { animation: scan 4s linear infinite; }
+.animate-bracket-pulse { animation: pulse-bracket 0.8s linear infinite; }
+.animate-data-stream { animation: data-stream 2s ease-in-out infinite; }
+.animate-alert-slide { animation: alert-slide-in 5s cubic-bezier(0.2, 1, 0.3, 1) forwards; }
+.animate-alert-border { animation: alert-border-flash 1s linear 3; }
+.animate-detection-appear { animation: detection-appear 0.4s cubic-bezier(0.2, 1, 0.3, 1) forwards; }
+.animate-card-slide { animation: card-slide-in 0.3s cubic-bezier(0.2, 1, 0.3, 1) forwards; }
+.animate-strobe { animation: strobe 0.15s linear 2; }
+.animate-glitch { animation: glitch-h 0.3s linear; }
+.animate-threat-pulse { animation: threat-pulse 2s ease-in-out infinite; }
+.animate-h-scan { animation: horizontal-scan 3s linear infinite; }

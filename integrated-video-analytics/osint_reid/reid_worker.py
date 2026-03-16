@@ -44,15 +44,21 @@ class ReIDWorker:
     def _load_reid_model(self) -> Any:
         try:
             import torchreid  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise RuntimeError(
-                "torchreid is required for OSNet ReID. Install with: pip install torchreid"
-            ) from exc
-        model = torchreid.models.build_model(name=REID_MODEL, num_classes=1000, pretrained=True)
-        model.eval()
-        model.to(self.device)
-        logger.info("Loaded ReID model", extra={"stage": "reid_model", "device": self.device.type, "model": REID_MODEL})
-        return model
+        except ImportError:
+            logger.warning(
+                "torchreid not installed — OSNet ReID embeddings disabled. "
+                "Install with: pip install torchreid"
+            )
+            return None
+        try:
+            model = torchreid.models.build_model(name=REID_MODEL, num_classes=1000, pretrained=True)
+            model.eval()
+            model.to(self.device)
+            logger.info("Loaded ReID model", extra={"stage": "reid_model", "device": self.device.type, "model": REID_MODEL})
+            return model
+        except Exception as exc:
+            logger.warning("Failed to load ReID model (%s) — ReID disabled.", exc)
+            return None
 
     def _load_face_model(self) -> Any:
         try:
@@ -69,7 +75,7 @@ class ReIDWorker:
         return model
 
     def compute_reid_embeddings(self, tracklet_frames: list[np.ndarray]) -> np.ndarray:
-        if not tracklet_frames:
+        if not tracklet_frames or self.reid_model is None:
             return np.empty((0, 0), dtype=np.float32)
 
         tensors = [_normalize_image(frame, (128, 256)) for frame in tracklet_frames]

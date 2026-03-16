@@ -25,8 +25,8 @@ def test_normalize_plate_text_accepts_alphanumeric_plate():
 
 
 def test_normalize_plate_text_rejects_invalid_candidates():
-    assert pipeline.normalize_plate_text("ABCDEFG") is None
-    assert pipeline.normalize_plate_text("1234567") is None
+    assert pipeline.normalize_plate_text("ABCDEFGHIJK") is None
+    assert pipeline.normalize_plate_text("A1") is None
     assert pipeline.normalize_plate_text("AB-1") is None
 
 

@@ -79,7 +79,7 @@ TARGET_CLASSES = {
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
 WATCHLIST_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 PLATE_ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-PLATE_TEXT_PATTERN = re.compile(r"^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{3,4}$")
+PLATE_TEXT_PATTERN = re.compile(r"^[A-Z0-9]{4,10}$")
 
 
 def resolve_model_path(explicit: Optional[str], *local_candidates: Path, fallback: str) -> str:
@@ -177,21 +177,21 @@ def trim_timestamp_cache(
         cache.pop(oldest_key, None)
 
 
-DETECTION_CONFIDENCE = read_env_float("CYBERSHIELD_DETECT_CONFIDENCE", 0.15, minimum=0.05, maximum=0.95)
+DETECTION_CONFIDENCE = read_env_float("CYBERSHIELD_DETECT_CONFIDENCE", 0.20, minimum=0.05, maximum=0.95)
 PLATE_CONFIDENCE = read_env_float("CYBERSHIELD_PLATE_CONFIDENCE", 0.25, minimum=0.05, maximum=0.95)
 DETECTION_IMAGE_SIZE = read_env_int(
     "CYBERSHIELD_DETECT_IMGSZ",
-    896,
+    1024,
     minimum=320,
     maximum=1600,
 )
 PLATE_IMAGE_SIZE = read_env_int("CYBERSHIELD_PLATE_IMGSZ", 640, minimum=256, maximum=1280)
 MIN_STABLE_FRAMES = read_env_int("CYBERSHIELD_MIN_STABLE_FRAMES", 2, minimum=1, maximum=12)
-PLATE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_SCAN_INTERVAL", 5.0, minimum=0.2)
-PLATE_REFRESH_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_REFRESH_INTERVAL", 15.0, minimum=0.5)
+PLATE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_SCAN_INTERVAL", 2.0, minimum=0.2)
+PLATE_REFRESH_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_REFRESH_INTERVAL", 8.0, minimum=0.5)
 FACE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_FACE_SCAN_INTERVAL", 3.0, minimum=0.5)
 PLATE_OCR_TARGET_WIDTH = read_env_int("CYBERSHIELD_PLATE_TARGET_WIDTH", 480, minimum=240, maximum=1280)
-PLATE_HEURISTIC_MIN_VEHICLE_WIDTH = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_WIDTH", 150, minimum=80, maximum=1000)
+PLATE_HEURISTIC_MIN_VEHICLE_WIDTH = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_WIDTH", 100, minimum=80, maximum=1000)
 PLATE_HEURISTIC_MIN_VEHICLE_HEIGHT = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_HEIGHT", 80, minimum=40, maximum=1000)
 RENDER_TRACK_TTL_SECONDS = read_env_float(
     "CYBERSHIELD_RENDER_TRACK_TTL",
@@ -207,14 +207,14 @@ RENDER_TRACK_LATENCY_MULTIPLIER = read_env_float(
 )
 TRACK_STALE_SECONDS = read_env_float("CYBERSHIELD_TRACK_STALE_SECONDS", 15.0, minimum=1.0)
 METRIC_WRITE_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_METRIC_WRITE_INTERVAL", 2.0, minimum=0.5)
-PLATE_CONFIRMATION_HITS = read_env_int("CYBERSHIELD_PLATE_CONFIRMATION_HITS", 2, minimum=1, maximum=8)
+PLATE_CONFIRMATION_HITS = read_env_int("CYBERSHIELD_PLATE_CONFIRMATION_HITS", 1, minimum=1, maximum=8)
 PLATE_DIRECT_ACCEPT_CONFIDENCE = read_env_float(
     "CYBERSHIELD_PLATE_DIRECT_CONFIDENCE",
-    0.82,
+    0.50,
     minimum=0.1,
     maximum=0.99,
 )
-PLATE_MIN_AGGREGATE_SCORE = read_env_float("CYBERSHIELD_PLATE_MIN_SCORE", 1.2, minimum=0.1)
+PLATE_MIN_AGGREGATE_SCORE = read_env_float("CYBERSHIELD_PLATE_MIN_SCORE", 0.28, minimum=0.1)
 PLATE_EXECUTOR_WORKERS = read_env_int(
     "CYBERSHIELD_PLATE_WORKERS",
     max(2, min(4, os.cpu_count() or 4)),
@@ -233,8 +233,8 @@ TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 60, minimum=5,
 TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda.is_available() else 8, minimum=1, maximum=60)
 TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 1, minimum=1, maximum=8)
 PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 300.0, minimum=10.0)
-PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.75, minimum=0.1, maximum=0.99)
-LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.5, minimum=0.05, maximum=0.95)
+PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.60, minimum=0.1, maximum=0.99)
+LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.20, minimum=0.05, maximum=0.95)
 CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE", 0.78, minimum=0.05, maximum=0.99)
 ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
 ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
@@ -448,6 +448,7 @@ class SharedResources:
                     print("Loading PaddleOCR reader")
                     cls._paddle_ocr_reader = PaddleOCR(
                         lang="en",
+                        use_textline_orientation=True,
                     )
                     cls._clear_initialization_error("paddleocr")
                 except Exception as exc:
@@ -598,6 +599,8 @@ class VideoPipeline:
         self.pending_face_futures: set[concurrent.futures.Future[Any]] = set()
         self.pending_db_futures: set[concurrent.futures.Future[Any]] = set()
         self.last_metric_write = 0.0
+        self.last_low_confidence_log: Dict[int, float] = {}
+        self.rider_proxy_track_ids: Dict[int, float] = {}
         self._cached_watchlist_embeddings: Dict[str, Optional[np.ndarray]] = {}
         self._cached_watchlist_signature: tuple[tuple[str, int, int], ...] = ()
         self._plate_api_disabled_until = 0.0
@@ -630,6 +633,10 @@ class VideoPipeline:
         self._effective_sahi_interval = max(1, SAHI_INTERVAL)
         self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
         self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+        self._effective_plate_scan_interval = PLATE_SCAN_INTERVAL_SECONDS
+        self._effective_plate_refresh_interval = PLATE_REFRESH_INTERVAL_SECONDS
+        self._effective_face_scan_interval = FACE_SCAN_INTERVAL_SECONDS
+        self._effective_gemini_enabled = self.gemini_enabled
         self.osint_service = None
         if ENABLE_OSINT_REID:
             try:
@@ -677,9 +684,9 @@ class VideoPipeline:
             return "Low"
         area_megapixels = max((frame_width * frame_height) / 1_000_000.0, 0.5)
         density_score = people_count / area_megapixels
-        if density_score < 2.5:
+        if density_score < 0.75:
             return "Low"
-        if density_score < 5.5:
+        if density_score < 2.25:
             return "Medium"
         return "High"
 
@@ -698,6 +705,17 @@ class VideoPipeline:
             analytics_interval * 2.0,
         )
         return min(ttl, RENDER_TRACK_MAX_TTL_SECONDS)
+
+    @staticmethod
+    def _box_overlaps(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int], margin: int = 18) -> bool:
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        return not (
+            (ax2 + margin) < bx1
+            or (bx2 + margin) < ax1
+            or (ay2 + margin) < by1
+            or (by2 + margin) < ay1
+        )
 
     @staticmethod
     def _watchlist_has_images(watchlist_dir: Path) -> bool:
@@ -855,6 +873,10 @@ class VideoPipeline:
             self._effective_sahi_interval = max(1, SAHI_INTERVAL)
             self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
             self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+            self._effective_plate_scan_interval = PLATE_SCAN_INTERVAL_SECONDS
+            self._effective_plate_refresh_interval = PLATE_REFRESH_INTERVAL_SECONDS
+            self._effective_face_scan_interval = FACE_SCAN_INTERVAL_SECONDS
+            self._effective_gemini_enabled = bool(getattr(self, "gemini_enabled", False))
             return
 
         mode = self._adaptive_mode
@@ -865,6 +887,10 @@ class VideoPipeline:
             self._effective_sahi_interval = max(8, SAHI_INTERVAL * 4)
             self._effective_heavy_interval = max(6, HEAVY_VALIDATOR_INTERVAL * 3)
             self._effective_rtdetr_interval = max(8, RTDETR_INTERVAL * 4)
+            self._effective_plate_scan_interval = PLATE_SCAN_INTERVAL_SECONDS * 3.0
+            self._effective_plate_refresh_interval = PLATE_REFRESH_INTERVAL_SECONDS * 2.0
+            self._effective_face_scan_interval = FACE_SCAN_INTERVAL_SECONDS * 2.0
+            self._effective_gemini_enabled = False
             return
 
         if mode == "caution":
@@ -874,6 +900,10 @@ class VideoPipeline:
             self._effective_sahi_interval = max(SAHI_INTERVAL + 1, SAHI_INTERVAL * 2)
             self._effective_heavy_interval = max(HEAVY_VALIDATOR_INTERVAL + 1, HEAVY_VALIDATOR_INTERVAL * 2)
             self._effective_rtdetr_interval = max(RTDETR_INTERVAL + 2, RTDETR_INTERVAL * 2)
+            self._effective_plate_scan_interval = PLATE_SCAN_INTERVAL_SECONDS * 1.5
+            self._effective_plate_refresh_interval = PLATE_REFRESH_INTERVAL_SECONDS * 1.5
+            self._effective_face_scan_interval = FACE_SCAN_INTERVAL_SECONDS * 1.5
+            self._effective_gemini_enabled = bool(getattr(self, "gemini_enabled", False)) and self.device != "cpu"
             return
 
         self._effective_sahi_enabled = self._base_sahi_enabled
@@ -882,6 +912,10 @@ class VideoPipeline:
         self._effective_sahi_interval = max(1, SAHI_INTERVAL)
         self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
         self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+        self._effective_plate_scan_interval = PLATE_SCAN_INTERVAL_SECONDS
+        self._effective_plate_refresh_interval = PLATE_REFRESH_INTERVAL_SECONDS
+        self._effective_face_scan_interval = FACE_SCAN_INTERVAL_SECONDS
+        self._effective_gemini_enabled = bool(getattr(self, "gemini_enabled", False))
 
     def _update_adaptive_governor(self, state: Dict[str, Any]) -> None:
         if not self.adaptive_governor_enabled:
@@ -1006,10 +1040,14 @@ class VideoPipeline:
             31,
             11,
         )
+        # Extra contrast-normalized variant for glare and low-light scenes.
+        contrast = cv2.convertScaleAbs(sharpened, alpha=1.65, beta=8)
+        sharp_kernel = np.array([[0, -1, 0], [-1, 5.2, -1], [0, -1, 0]], dtype=np.float32)
+        contrast_sharp = cv2.filter2D(contrast, -1, sharp_kernel)
         adaptive_inv = cv2.bitwise_not(adaptive)
         _, otsu = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         otsu_inv = cv2.bitwise_not(otsu)
-        return [clahe, sharpened, adaptive, adaptive_inv, otsu, otsu_inv]
+        return [clahe, sharpened, contrast, contrast_sharp, adaptive, adaptive_inv, otsu, otsu_inv]
 
     @staticmethod
     def _plate_search_windows(vehicle_crop) -> list[tuple[Any, int, int]]:
@@ -1019,8 +1057,8 @@ class VideoPipeline:
 
         windows: list[tuple[Any, int, int]] = [(vehicle_crop, 0, 0)]
         if width >= 100 and height >= 50:
-            top = int(height * 0.30)
-            bottom = min(height, int(height * 0.92))
+            top = int(height * 0.10)
+            bottom = min(height, int(height * 0.95))
             left = int(width * 0.04)
             right = min(width, int(width * 0.96))
             focused = vehicle_crop[top:bottom, left:right]
@@ -1129,6 +1167,48 @@ class VideoPipeline:
             "source": source,
         }
 
+    @staticmethod
+    def _iter_paddle_text_candidates(results: Any) -> list[tuple[str, float]]:
+        parsed: list[tuple[str, float]] = []
+        if not results:
+            return parsed
+
+        def add_candidate(text: Any, score: Any) -> None:
+            try:
+                confidence = float(score or 0.0)
+            except (TypeError, ValueError):
+                return
+            parsed.append((str(text or ""), confidence))
+
+        # Paddle classic output:
+        # [[[[x,y]...], (text, score)], ...]
+        if isinstance(results, list):
+            for item in results:
+                if isinstance(item, list):
+                    for line in item:
+                        if not isinstance(line, (list, tuple)) or len(line) < 2:
+                            continue
+                        text_conf = line[1]
+                        if isinstance(text_conf, (list, tuple)) and len(text_conf) >= 2:
+                            add_candidate(text_conf[0], text_conf[1])
+                elif isinstance(item, dict):
+                    rec_texts = item.get("rec_texts") or []
+                    rec_scores = item.get("rec_scores") or []
+                    for idx, text in enumerate(rec_texts):
+                        score = rec_scores[idx] if idx < len(rec_scores) else 0.0
+                        add_candidate(text, score)
+
+        # Paddle structured dict output:
+        # {"rec_texts": [...], "rec_scores": [...]}
+        if isinstance(results, dict):
+            rec_texts = results.get("rec_texts") or []
+            rec_scores = results.get("rec_scores") or []
+            for idx, text in enumerate(rec_texts):
+                score = rec_scores[idx] if idx < len(rec_scores) else 0.0
+                add_candidate(text, score)
+
+        return parsed
+
     def _extract_plate_paddle(self, vehicle_crop) -> Optional[Dict[str, Any]]:
         if vehicle_crop.size == 0 or self.paddle_ocr_reader is None:
             return None
@@ -1138,28 +1218,18 @@ class VideoPipeline:
             variants = self._prepare_plate_variants(region)
             paddle_inputs = [region]
             if variants:
-                paddle_inputs.append(variants[1])
+                paddle_inputs.extend(variants[:4])
 
             for image_input in paddle_inputs:
                 try:
                     results = self.paddle_ocr_reader.ocr(image_input, cls=True)
                 except Exception:
-                    continue
-
-                lines = []
-                if results and isinstance(results, list):
-                    first = results[0]
-                    if isinstance(first, list):
-                        lines = first
-
-                for line in lines:
-                    if not isinstance(line, (list, tuple)) or len(line) < 2:
+                    try:
+                        results = self.paddle_ocr_reader.ocr(image_input, cls=False)
+                    except Exception:
                         continue
-                    text_conf = line[1]
-                    if not isinstance(text_conf, (list, tuple)) or len(text_conf) < 2:
-                        continue
-                    raw_text = str(text_conf[0] or "")
-                    confidence = float(text_conf[1] or 0.0)
+
+                for raw_text, confidence in self._iter_paddle_text_candidates(results):
                     normalized = normalize_plate_text(raw_text)
                     if not normalized:
                         continue
@@ -1256,13 +1326,15 @@ class VideoPipeline:
 
         candidates: Dict[str, Dict[str, float]] = {}
         for region, region_confidence in self._candidate_plate_regions(vehicle_crop):
-            for variant in self._prepare_plate_variants(region):
+            # Reference approach: plain grayscale first (AarohiSingla/ANPR), then enhanced variants
+            raw_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
+            ocr_inputs = [raw_gray] + self._prepare_plate_variants(region)
+            for variant in ocr_inputs:
                 try:
                     results = self.ocr_reader.readtext(
                         variant,
                         detail=1,
                         paragraph=False,
-                        allowlist=PLATE_ALLOWLIST,
                     )
                 except Exception:
                     continue
@@ -1332,7 +1404,7 @@ class VideoPipeline:
         return self._gemini_model
 
     def enrich_with_gemini(self, record: dict, entity_type: str) -> dict:
-        if not self.gemini_enabled:
+        if not self._effective_gemini_enabled:
             return record
         model = self._init_gemini_model()
         if model is None:
@@ -1563,7 +1635,9 @@ class VideoPipeline:
             if task_id in self.pending_tasks:
                 return
             refresh_interval = (
-                PLATE_REFRESH_INTERVAL_SECONDS if tracker_id in self.plate_results else PLATE_SCAN_INTERVAL_SECONDS
+                self._effective_plate_refresh_interval
+                if tracker_id in self.plate_results
+                else self._effective_plate_scan_interval
             )
             if now - self.last_plate_attempt.get(tracker_id, 0.0) < refresh_interval:
                 return
@@ -1605,7 +1679,7 @@ class VideoPipeline:
         with self.state_lock:
             if task_id in self.pending_tasks:
                 return
-            if now - self.last_face_attempt.get(tracker_id, 0.0) < FACE_SCAN_INTERVAL_SECONDS:
+            if now - self.last_face_attempt.get(tracker_id, 0.0) < self._effective_face_scan_interval:
                 return
             self.pending_tasks.add(task_id)
             self.last_face_attempt[tracker_id] = now
@@ -1718,6 +1792,16 @@ class VideoPipeline:
                         },
                         "tracker_id",
                     )
+                    if now - self.last_low_confidence_log.get(tracker_id, 0.0) >= 3.0:
+                        self._append_event(
+                            state,
+                            "ANPR Low Confidence",
+                            (
+                                f"Pending plate for #{tracker_id}: '{best_text}' "
+                                f"hits={int(best_vote['hits'])} conf={best_vote['best_confidence']:.2f}"
+                            ),
+                        )
+                        self.last_low_confidence_log[tracker_id] = now
                     return
 
                 # Construct enriched string from VOTED MMC
@@ -2098,6 +2182,8 @@ class VideoPipeline:
         current_vehicle_ids: set[int] = set()
         current_people_ids: set[int] = set()
         current_vehicle_types = {vehicle_type: 0 for vehicle_type in VEHICLE_CLASSES}
+        motorcycle_tracks: list[tuple[int, tuple[int, int, int, int]]] = []
+        stable_person_boxes: list[tuple[int, int, int, int]] = []
         zone_count = 0
 
         with self.state_lock:
@@ -2173,9 +2259,13 @@ class VideoPipeline:
                 else:
                     if is_stable_track:
                         current_people_ids.add(tracker_id)
+                        stable_person_boxes.append(box)
                     if is_stable_track and not track_state["person_recorded"]:
                         track_state["person_recorded"] = True
                         state["people_total_count"] += 1
+
+                if class_name == "motorcycle" and is_stable_track:
+                    motorcycle_tracks.append((tracker_id, box))
 
                 if is_stable_track and self.osint_service is not None:
                     try:
@@ -2191,8 +2281,18 @@ class VideoPipeline:
                     except Exception as exc:
                         print(f"OSINT collect failed: {exc}")
 
+            # Rider proxy: treat unmatched motorcycle tracks as one visible person.
+            rider_proxy_count = 0
+            for rider_track_id, rider_box in motorcycle_tracks:
+                if any(self._box_overlaps(rider_box, person_box) for person_box in stable_person_boxes):
+                    continue
+                rider_proxy_count += 1
+                touch_timestamp_cache(self.rider_proxy_track_ids, rider_track_id, now)
+
+            trim_timestamp_cache(self.rider_proxy_track_ids, now, TRACK_STALE_SECONDS, FACE_TRACK_CACHE_LIMIT)
+
             state["vehicle_count"] = len(current_vehicle_ids)
-            state["people_count"] = len(current_people_ids)
+            state["people_count"] = len(current_people_ids) + rider_proxy_count
             state["vehicle_current_types"] = current_vehicle_types
             state["zone_count"] = zone_count
             state["crowd_density"] = self._estimate_density(

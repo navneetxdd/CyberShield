@@ -3,1634 +3,1125 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CyberShield AI Video Analytics</title>
+    <title>CyberShield Operations</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --panel: rgba(5, 5, 8, 0.92);
-            --border: rgba(96, 165, 250, 0.24);
-            --text: #edf2ff;
+            --bg: #000000;
+            --bg-soft: #070707;
+            --panel: rgba(11, 11, 11, 0.92);
+            --panel-2: rgba(22, 22, 22, 0.92);
+            --ink: #f6f6f6;
+            --muted: #a5a5a5;
+            --line: rgba(255, 255, 255, 0.12);
+            --line-strong: rgba(255, 255, 255, 0.28);
+            --accent: #ffffff;
+            --danger: #fb7185;
+            --warn: #f59e0b;
+            --ok: #22c55e;
         }
+
+        * { box-sizing: border-box; }
 
         body {
-            font-family: 'IBM Plex Sans', sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            color: var(--ink);
+            font-family: "IBM Plex Sans", sans-serif;
             background:
-                radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 48%),
-                radial-gradient(circle at top right, rgba(20, 184, 166, 0.08), transparent 46%),
-                #000000;
-            color: var(--text);
+                radial-gradient(1400px 680px at -10% -20%, rgba(255, 255, 255, 0.08), transparent 63%),
+                radial-gradient(1000px 460px at 110% 120%, rgba(255, 255, 255, 0.05), transparent 64%),
+                radial-gradient(820px 360px at 60% 0%, rgba(255, 255, 255, 0.03), transparent 58%),
+                linear-gradient(180deg, var(--bg), var(--bg-soft) 58%, var(--bg)),
+                var(--bg);
+            overflow-x: hidden;
         }
 
-        h1, h2, h3, h4, .display-font {
-            font-family: 'Space Grotesk', sans-serif;
+        h1, h2, h3, h4, h5 { font-family: "Space Grotesk", sans-serif; letter-spacing: 0.01em; }
+
+        .cyber-grid {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image:
+                linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+                linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px),
+                radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.03) 0, transparent 24%),
+                radial-gradient(circle at 80% 70%, rgba(255, 255, 255, 0.02) 0, transparent 26%);
+            background-size: 52px 52px, 52px 52px, auto, auto;
+            opacity: 0.52;
         }
 
-        .glass-panel {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            box-shadow: 0 22px 55px rgba(3, 9, 20, 0.44);
-            backdrop-filter: blur(14px);
+        .panel {
+            background: linear-gradient(160deg, var(--panel), var(--panel-2));
+            border: 1px solid var(--line);
+            border-radius: 16px;
+            box-shadow: 0 22px 54px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            backdrop-filter: blur(10px);
+            transition: border-color 180ms ease, transform 180ms ease;
         }
 
-        .metric-card {
-            position: relative;
-            overflow: hidden;
-            border-radius: 1rem;
-            padding: 1.5rem;
-            background: linear-gradient(180deg, rgba(6, 11, 20, 0.98), rgba(0, 0, 0, 0.98));
-            border: 1px solid rgba(96, 165, 250, 0.12);
+        .panel:hover {
+            border-color: rgba(255, 255, 255, 0.22);
+            transform: translateY(-1px);
         }
 
-        .metric-card::after {
+        .line-top { position: relative; }
+        .line-top::before {
             content: "";
             position: absolute;
-            inset: auto -18% -55% auto;
-            width: 7rem;
-            height: 7rem;
+            left: 16px;
+            top: -1px;
+            width: 112px;
+            height: 2px;
+            background: linear-gradient(90deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.12));
             border-radius: 999px;
-            background: radial-gradient(circle, rgba(59, 130, 246, 0.24), transparent 70%);
         }
 
-        .metric-value {
-            font-size: 2rem;
-            line-height: 1;
-            font-weight: 700;
+        .nav-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.015));
+            padding: 10px 12px;
+            color: #ebebeb;
+            transition: 180ms ease;
+            font-weight: 500;
         }
+
+        .nav-btn:hover { border-color: rgba(255, 255, 255, 0.24); background: rgba(255, 255, 255, 0.09); }
+
+        .nav-btn.active {
+            border-color: var(--line-strong);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
+            color: #ffffff;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+        }
+
+        .kpi {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            padding: 14px;
+            background: linear-gradient(180deg, rgba(20, 20, 20, 0.92), rgba(10, 10, 10, 0.92));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .kpi .value { font-size: 2rem; line-height: 1; font-family: "Space Grotesk", sans-serif; }
+
+        .incident { border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.16); padding: 12px; background: linear-gradient(180deg, rgba(24, 24, 24, 0.92), rgba(12, 12, 12, 0.92)); }
+        .incident.critical { border-color: rgba(251, 113, 133, 0.4); background: rgba(127, 29, 29, 0.2); }
+        .incident.warning { border-color: rgba(245, 158, 11, 0.4); background: rgba(120, 53, 15, 0.2); }
+
+        .record-row { border-bottom: 1px solid rgba(148, 163, 184, 0.15); padding: 10px 0; }
+        .record-row:last-child { border-bottom: 0; }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.04);
+            padding: 2px 8px;
+            font-size: 0.8rem;
+        }
+
+        .view { display: none; animation: viewIn 220ms ease; }
+        .view.active { display: block; }
+
+        @keyframes viewIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulseEdge {
+            0%, 100% { box-shadow: 0 0 0 rgba(255, 255, 255, 0); }
+            50% { box-shadow: 0 0 28px rgba(255, 255, 255, 0.12); }
+        }
+
+        .pulse { animation: pulseEdge 2.6s infinite; }
 
         .video-shell {
-            min-height: clamp(220px, 58vh, 480px);
-            border-radius: 1.2rem;
+            min-height: clamp(220px, 52vh, 520px);
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: radial-gradient(circle at center, rgba(255, 255, 255, 0.12), rgba(0, 0, 0, 0.97) 62%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
             overflow: hidden;
-            border: 1px solid rgba(96, 165, 250, 0.14);
-            background:
-                radial-gradient(circle at center, rgba(59, 130, 246, 0.12), transparent 55%),
-                #02070f;
         }
 
-        .video-feed {
-            width: 100%;
-            height: auto;
-            max-height: 75vh;
-            object-fit: contain;
+        input, select, button {
+            transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
         }
 
-        .table-shell {
-            max-height: 280px;
-            overflow-y: auto;
+        input:focus, select:focus {
+            outline: none;
+            border-color: rgba(255, 255, 255, 0.34) !important;
+            box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
         }
 
-        .record-row {
-            display: grid;
-            gap: 0.75rem;
-            padding: 1rem 0;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-        }
+        .video-feed { width: 100%; max-height: 78vh; object-fit: contain; }
 
-        .record-row:last-child {
-            border-bottom: none;
-        }
-
-            .health-tile {
-                border: 1px solid rgba(148, 163, 184, 0.14);
-                background: rgba(2, 6, 23, 0.72);
-                border-radius: 1rem;
-                padding: 1rem;
+        .hide-mobile { display: none; }
+        @media (min-width: 1024px) {
+            .hide-mobile { display: block; }
+            .workspace {
+                display: grid;
+                grid-template-columns: 290px minmax(0, 1fr);
+                gap: 20px;
+                max-width: 1800px;
+                margin: 0 auto;
+                padding: 18px;
             }
+        }
 
-            .health-pill {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.45rem;
+        @media (max-width: 1023px) {
+            .workspace { max-width: 1200px; margin: 0 auto; padding: 12px; }
+            .mobile-nav { display: flex; gap: 8px; overflow-x: auto; }
+            .mobile-nav button {
+                border: 1px solid rgba(148, 163, 184, 0.25);
+                background: rgba(15, 23, 42, 0.45);
                 border-radius: 999px;
-                padding: 0.3rem 0.7rem;
-                font-size: 0.75rem;
-                line-height: 1rem;
-                font-weight: 600;
-                letter-spacing: 0.04em;
+                padding: 8px 12px;
+                white-space: nowrap;
             }
-
-            .health-pill::before {
-                content: "";
-                width: 0.5rem;
-                height: 0.5rem;
-                border-radius: 999px;
-                background: currentColor;
-                box-shadow: 0 0 0.8rem currentColor;
-            }
-
-            .health-pill-ok {
-                color: #86efac;
-                background: rgba(34, 197, 94, 0.12);
-                border: 1px solid rgba(34, 197, 94, 0.28);
-            }
-
-            .health-pill-warn {
-                color: #ffffff;
-                background: rgba(245, 158, 11, 0.22);
-                border: 1px solid rgba(245, 158, 11, 0.42);
-            }
-
-            .health-pill-error {
-                color: #fca5a5;
-                background: rgba(239, 68, 68, 0.12);
-                border: 1px solid rgba(239, 68, 68, 0.28);
-            }
-
-            .health-pill-info {
-                color: #93c5fd;
-                background: rgba(59, 130, 246, 0.12);
-                border: 1px solid rgba(59, 130, 246, 0.28);
-            }
-
-            .fact-chip {
-                border-radius: 1rem;
-                border: 1px solid rgba(148, 163, 184, 0.14);
-                background: rgba(2, 6, 23, 0.66);
-                padding: 0.85rem 1rem;
-            }
-
-            .warning-item {
-                border-radius: 1rem;
-                border: 1px solid rgba(148, 163, 184, 0.14);
-                background: rgba(2, 6, 23, 0.66);
-                padding: 0.9rem 1rem;
-            }
-
-            .ops-kpi {
-                border-radius: 1rem;
-                border: 1px solid rgba(148, 163, 184, 0.12);
-                background: rgba(2, 6, 23, 0.72);
-                padding: 1rem;
-            }
-
-            .ops-status-pill {
-                display: inline-flex;
-                align-items: center;
-                border-radius: 999px;
-                border: 1px solid rgba(148, 163, 184, 0.14);
-                background: rgba(15, 23, 42, 0.8);
-                padding: 0.42rem 0.8rem;
-                font-size: 0.75rem;
-                font-weight: 600;
-                color: #cbd5e1;
-            }
-
-            .incident-card {
-                border-radius: 1rem;
-                border: 1px solid rgba(148, 163, 184, 0.12);
-                background: rgba(2, 6, 23, 0.72);
-                padding: 1rem;
-            }
-
-            .incident-critical {
-                border-color: rgba(239, 68, 68, 0.24);
-                background: rgba(127, 29, 29, 0.16);
-            }
-
-            .incident-warning {
-                border-color: rgba(245, 158, 11, 0.24);
-                background: rgba(120, 53, 15, 0.16);
-            }
-
-            .incident-info {
-                border-color: rgba(59, 130, 246, 0.24);
-                background: rgba(30, 64, 175, 0.12);
-            }
-
-        ::-webkit-scrollbar {
-            width: 6px;
-            height: 6px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: rgba(15, 23, 42, 0.7);
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: rgba(96, 165, 250, 0.45);
-            border-radius: 999px;
+            .mobile-nav button.active { border-color: rgba(255, 255, 255, 0.28); color: #ffffff; background: rgba(255, 255, 255, 0.08); }
         }
     </style>
 </head>
-<body class="min-h-screen">
-    <nav class="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/75 backdrop-blur-xl">
-        <div class="mx-auto flex max-w-[1700px] flex-col gap-4 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
-            <div class="flex items-center gap-4">
-                <div class="flex h-11 w-11 items-center justify-center rounded-2xl border border-blue-400/30 bg-blue-500/15 text-blue-300 shadow-lg shadow-blue-500/10">
-                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 7l9-4 9 4-9 4-9-4zm0 5l9 4 9-4m-18 5l9 4 9-4"></path>
-                    </svg>
-                </div>
-                <div>
-                    <p class="display-font text-xl font-bold tracking-tight">CyberShield Analytics</p>
-                    <p class="text-sm text-slate-400">Integrated vehicle, ANPR, face and crowd intelligence</p>
+<body>
+    <div class="cyber-grid"></div>
+
+    <div class="workspace">
+        <aside id="appSidebar" class="hide-mobile panel line-top p-4 h-[calc(100vh-36px)] sticky top-[18px]">
+            <div class="mb-4">
+                <h1 class="text-xl font-bold">CyberShield</h1>
+                <p class="text-sm text-slate-400">Operations Console</p>
+            </div>
+
+            <div class="space-y-2 mb-5">
+                <button class="nav-btn active" data-view="monitor">Monitor</button>
+                <button class="nav-btn" data-view="records">Records</button>
+                <button class="nav-btn" data-view="analytics">Analytics</button>
+                <button class="nav-btn" data-view="watchlist">Watchlist</button>
+            </div>
+
+            <div class="rounded-xl border border-slate-700 bg-slate-950/70 p-3 mb-4">
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Live Status</p>
+                <div class="mt-2 flex items-center gap-2 text-sm">
+                    <span id="statusIndicatorColor" class="h-2.5 w-2.5 rounded-full bg-rose-500"></span>
+                    <span id="systemStatusText">Awaiting Source</span>
                 </div>
             </div>
 
-            <div class="flex flex-wrap items-center gap-3">
-                <div class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-200">
-                    <span class="inline-flex items-center gap-2" aria-label="System connection status">
-                        <span class="relative flex h-2.5 w-2.5">
-                            <span id="statusIndicatorPing" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70 hidden"></span>
-                            <span id="statusIndicatorColor" class="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500"></span>
-                        </span>
-                        <span id="systemStatusText">Awaiting Source</span>
-                    </span>
+            <div class="mt-auto space-y-3">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">CPU</p>
+                    <p id="cpuGauge" class="text-2xl font-bold text-zinc-100">0%</p>
                 </div>
-
-                <a id="reportLink" href="#" target="_blank" class="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-medium text-white transition hover:border-slate-500 hover:bg-slate-700">
-                    Download Report
-                </a>
-                <a id="maltegoExportLink" href="#" target="_blank" class="rounded-xl border border-indigo-500 bg-indigo-600 px-4 py-2 text-sm font-medium text-indigo-100 transition hover:border-indigo-500 hover:bg-indigo-700">
-                    Export Maltego Graph
-                </a>
-
-                <select id="maltegoEntitySelector" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white">
-                    <option value="faces">Faces</option>
-                    <option value="vehicles">Vehicles</option>
-                    <option value="plates">Plates</option>
-                    <option value="events">Events</option>
-                </select>
-
-                <label for="cameraSelector" class="sr-only">Select active camera</label>
-                <select id="cameraSelector" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white">
-                    <option value="">Select Camera...</option>
-                </select>
-
-                <button onclick="document.getElementById('addCameraModal').classList.remove('hidden')" class="rounded-xl border border-blue-500 bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-500">
-                    Add Source
-                </button>
-
-                <input type="file" id="videoFileInput" accept="video/mp4,video/x-m4v,video/*" class="hidden">
-            </div>
-        </div>
-    </nav>
-
-    <div id="addCameraModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="addCameraModalTitle">
-        <div class="glass-panel w-full max-w-md rounded-3xl p-6">
-            <h3 id="addCameraModalTitle" class="display-font text-xl font-bold text-white">Add Video Source</h3>
-            <p class="mt-1 text-sm text-slate-400">Use a camera ID, RTSP stream, webcam index, or upload a file.</p>
-
-            <div class="mt-5 space-y-4">
-                <div>
-                    <label for="newCamId" class="mb-1 block text-sm text-slate-300">Camera ID</label>
-                    <input id="newCamId" type="text" placeholder="gate_north" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Memory</p>
+                    <p id="memGauge" class="text-2xl font-bold text-zinc-100">0%</p>
                 </div>
-                <div>
-                    <label for="newCamSource" class="mb-1 block text-sm text-slate-300">Source</label>
-                    <input id="newCamSource" type="text" placeholder="rtsp://..., webcam index 0, or URL" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
+                <div class="rounded-xl border border-slate-700 bg-slate-950/70 p-3">
+                    <p class="text-xs uppercase tracking-[0.2em] text-slate-500">GPU</p>
+                    <p id="gpuGauge" class="text-2xl font-bold text-zinc-100">N/A</p>
                 </div>
             </div>
+        </aside>
 
-            <div class="my-4 text-center text-sm text-slate-500">or</div>
+        <main class="space-y-4">
+            <header class="panel line-top p-4 pulse">
+                <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                        <h2 class="text-xl font-bold">Unified Situation Grid</h2>
+                        <p class="text-sm text-slate-400">Real-time video intelligence, watchlist matching, and operational telemetry.</p>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="cameraSelector" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                            <option value="">Select Camera...</option>
+                        </select>
+                        <button id="openSourceModal" class="rounded-xl border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Add Source</button>
+                        <a id="reportLink" href="#" target="_blank" class="rounded-xl border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Report</a>
+                        <select id="maltegoEntitySelector" class="rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                            <option value="faces">Faces</option>
+                            <option value="vehicles">Vehicles</option>
+                            <option value="plates">Plates</option>
+                            <option value="events">Events</option>
+                        </select>
+                        <a id="maltegoExportLink" href="#" target="_blank" class="rounded-xl border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Maltego</a>
+                        <input type="file" id="videoFileInput" accept="video/mp4,video/x-m4v,video/*" class="hidden">
+                    </div>
+                </div>
+            </header>
 
-            <button onclick="document.getElementById('videoFileInput').click()" class="w-full rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700">
-                Upload Video File
-            </button>
+            <div class="mobile-nav lg:hidden">
+                <button class="active" data-view="monitor">Monitor</button>
+                <button data-view="records">Records</button>
+                <button data-view="analytics">Analytics</button>
+                <button data-view="watchlist">Watchlist</button>
+            </div>
 
-            <div class="mt-6 flex justify-end gap-3">
-                <button onclick="document.getElementById('addCameraModal').classList.add('hidden')" class="rounded-xl px-4 py-2 text-sm text-slate-400 transition hover:text-white">
-                    Cancel
-                </button>
-                <button onclick="submitNewCamera()" class="rounded-xl border border-blue-500 bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500">
-                    Save Camera
-                </button>
+            <section id="view-monitor" class="view active space-y-4">
+                <div class="grid grid-cols-2 gap-3 xl:grid-cols-6">
+                    <div class="kpi"><p class="text-xs text-slate-400">Vehicles In Frame</p><p id="vehicleCount" class="value text-zinc-100">0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Vehicles Recorded</p><p id="vehicleTotalCount" class="value text-zinc-100">0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">People In Frame</p><p id="peopleCount" class="value text-zinc-100">0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Crowd Density</p><p id="crowdDensity" class="value text-zinc-100">Low</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Faces</p><p id="faceCount" class="value text-zinc-100">0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Plates</p><p id="plateCount" class="value text-zinc-100">0</p></div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 2xl:grid-cols-12">
+                    <div class="panel p-3 2xl:col-span-8">
+                        <div class="video-shell">
+                            <img id="videoPlayer" src="" class="video-feed hidden" alt="Video Stream">
+                            <div id="videoPlaceholder" class="text-center text-slate-400">
+                                <p class="text-2xl font-bold mb-1">No active source</p>
+                                <p>Add a camera or upload a video to begin monitoring.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="panel p-4 2xl:col-span-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-base">Operational Incidents</h3>
+                            <span id="incidentCountBadge" class="tag">0 open</span>
+                        </div>
+                        <div id="incidentRail" class="space-y-3 max-h-[420px] overflow-y-auto"></div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                    <div class="kpi"><p class="text-xs text-slate-400">Stream FPS</p><p id="streamFps" class="value text-zinc-100">0.0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Analytics FPS</p><p id="analyticsFps" class="value text-zinc-100">0.0</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Latency</p><p id="inferenceLatency" class="value text-zinc-100">0 ms</p></div>
+                    <div class="kpi"><p class="text-xs text-slate-400">Device</p><p id="runtimeDevice" class="value text-zinc-100">cpu</p></div>
+                </div>
+
+                <div class="panel p-4">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 class="text-base">Live Activity</h3>
+                        <input id="logSearch" type="text" placeholder="Search logs..." class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                    </div>
+                    <div id="logContainer" class="max-h-64 overflow-y-auto"></div>
+                </div>
+            </section>
+
+            <section id="view-records" class="view space-y-4">
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                    <div class="panel p-4">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <h3 class="text-base">ANPR Records</h3>
+                            <div class="flex gap-2">
+                                <select id="plateQualityFilter" class="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white">
+                                    <option value="0.78">High</option>
+                                    <option value="0.65">Balanced</option>
+                                    <option value="0">All</option>
+                                </select>
+                                <select id="plateSourceFilter" class="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-white">
+                                    <option value="">All</option>
+                                    <option value="paddle">Paddle</option>
+                                    <option value="easyocr">EasyOCR</option>
+                                    <option value="cloud">Cloud</option>
+                                </select>
+                            </div>
+                        </div>
+                        <input id="plateSearch" type="text" placeholder="Search plate..." class="mb-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <div id="plateRecords" class="max-h-[540px] overflow-y-auto text-sm"></div>
+                    </div>
+
+                    <div class="panel p-4">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <h3 class="text-base">Face Matches</h3>
+                            <label class="text-xs inline-flex items-center gap-1"><input id="faceWatchlistOnly" type="checkbox"> Watchlist Only</label>
+                        </div>
+                        <input id="faceSearch" type="text" placeholder="Search identity..." class="mb-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <div id="faceRecords" class="max-h-[540px] overflow-y-auto text-sm"></div>
+                    </div>
+
+                    <div class="panel p-4">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <h3 class="text-base">Vehicle Records</h3>
+                            <label class="text-xs inline-flex items-center gap-1"><input id="vehicleRequirePlate" type="checkbox" checked> With Plate</label>
+                        </div>
+                        <input id="vehicleSearch" type="text" placeholder="Search tracker/type/plate..." class="mb-2 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        <div id="vehicleRecords" class="max-h-[540px] overflow-y-auto text-sm"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-analytics" class="view space-y-4">
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-12">
+                    <div class="panel p-4 xl:col-span-8">
+                        <h3 class="mb-2 text-base">Traffic Trend</h3>
+                        <div class="h-64"><canvas id="trafficTrendChart"></canvas></div>
+                    </div>
+                    <div class="panel p-4 xl:col-span-4">
+                        <h3 class="mb-2 text-base">Vehicle Mix</h3>
+                        <div class="h-64"><canvas id="vehicleChart"></canvas></div>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 gap-4 xl:grid-cols-12">
+                    <div class="panel p-4 xl:col-span-6">
+                        <h3 class="mb-2 text-base">Gender Analytics</h3>
+                        <div class="h-64"><canvas id="genderChart"></canvas></div>
+                    </div>
+                    <div class="panel p-4 xl:col-span-6">
+                        <h3 class="mb-2 text-base">Operations Summary</h3>
+                        <div class="grid grid-cols-2 gap-3 text-sm">
+                            <div class="kpi"><p class="text-xs text-slate-400">Peak Vehicles</p><p id="peakVehicleMetric" class="value text-zinc-100">0</p></div>
+                            <div class="kpi"><p class="text-xs text-slate-400">Avg Vehicles</p><p id="avgVehicleMetric" class="value text-zinc-100">0.0</p></div>
+                            <div class="kpi"><p class="text-xs text-slate-400">Avg People</p><p id="avgPeopleMetric" class="value text-zinc-100">0.0</p></div>
+                            <div class="kpi"><p class="text-xs text-slate-400">Peak Zone</p><p id="peakZoneMetric" class="value text-zinc-100">0</p></div>
+                        </div>
+                        <p id="serviceHealthSummary" class="mt-3 text-sm text-slate-300">Collecting status</p>
+                        <p id="ocrSourceSummary" class="mt-2 text-sm text-slate-400">No OCR records yet</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="view-watchlist" class="view space-y-4">
+                <div class="panel p-4">
+                    <div class="flex items-center gap-2 mb-3">
+                        <button id="watchTabIdentities" class="nav-btn active max-w-44">Identities (OSINT)</button>
+                        <button id="watchTabFiles" class="nav-btn max-w-44">Files (Legacy)</button>
+                    </div>
+
+                    <div id="watchlistIdentityPane" class="space-y-3">
+                        <div class="grid grid-cols-1 gap-2 lg:grid-cols-4">
+                            <input id="adminToken" type="password" placeholder="Admin token (for add action)" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white lg:col-span-2">
+                            <input id="watchlistName" type="text" placeholder="display name" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                            <input id="watchlistFile" type="file" accept="image/*" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                        </div>
+                        <button id="addIdentityBtn" class="rounded-lg border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Add Identity</button>
+                        <div id="watchlistEntries" class="max-h-[560px] overflow-y-auto text-sm"></div>
+                    </div>
+
+                    <div id="watchlistFilePane" class="space-y-3 hidden">
+                        <div class="grid grid-cols-1 gap-2 lg:grid-cols-3">
+                            <input id="watchlistFileName" type="text" placeholder="identity_name" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                            <input id="watchlistRawFile" type="file" accept="image/*" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white lg:col-span-2">
+                        </div>
+                        <button id="addLegacyWatchlistBtn" class="rounded-lg border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Add Legacy File Entry</button>
+                        <div id="watchlistFiles" class="max-h-[560px] overflow-y-auto text-sm"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div id="addCameraModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4">
+        <div class="panel w-full max-w-lg p-5">
+            <h3 class="text-lg mb-1">Add Source</h3>
+            <p class="text-sm text-slate-400 mb-3">Use camera id + source or upload a video file.</p>
+            <div class="space-y-2">
+                <input id="newCamId" type="text" placeholder="gate_north" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+                <input id="newCamSource" type="text" placeholder="rtsp://... or webcam index" class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
+            </div>
+            <div class="mt-4 flex items-center justify-between">
+                <button id="uploadVideoBtn" class="rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm">Upload Video</button>
+                <div class="space-x-2">
+                    <button id="cancelAddCamera" class="rounded-lg border border-slate-700 px-4 py-2 text-sm">Cancel</button>
+                    <button id="saveAddCamera" class="rounded-lg border border-zinc-500 bg-zinc-700/20 px-4 py-2 text-sm">Save</button>
+                </div>
             </div>
         </div>
     </div>
 
-    <main class="mx-auto max-w-[1700px] px-4 py-6">
-        <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">Vehicles In Frame</p>
-                <p id="vehicleCount" class="metric-value mt-3 text-blue-300">0</p>
-            </div>
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">Vehicles Recorded</p>
-                <p id="vehicleTotalCount" class="metric-value mt-3 text-cyan-300">0</p>
-            </div>
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">People In Frame</p>
-                <p id="peopleCount" class="metric-value mt-3 text-emerald-300">0</p>
-            </div>
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">Crowd Density</p>
-                <p id="crowdDensity" class="metric-value mt-3 text-teal-300">Low</p>
-            </div>
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">Faces Analyzed</p>
-                <p id="faceCount" class="metric-value mt-3 text-fuchsia-300">0</p>
-            </div>
-            <div class="metric-card">
-                <p class="text-sm uppercase tracking-[0.2em] text-slate-400">Plates Logged</p>
-                <p id="plateCount" class="metric-value mt-3 text-amber-300">0</p>
-            </div>
-        </section>
-
-        <section class="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-12">
-            <div class="lg:col-span-8 flex flex-col gap-6">
-                <div class="glass-panel rounded-[1.4rem] p-3">
-                    <div class="video-shell flex items-center justify-center">
-                        <img id="videoPlayer" src="" class="video-feed hidden" alt="Video Stream">
-                        <div id="videoPlaceholder" class="flex flex-col items-center px-8 py-16 text-center text-slate-400">
-                            <div class="mb-4 rounded-full border border-blue-400/20 bg-blue-500/10 p-4 text-blue-300">
-                                <svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.55-2.28A1 1 0 0121 8.62v6.76a1 1 0 01-1.45.89L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                                </svg>
-                            </div>
-                            <h2 class="display-font text-2xl font-bold text-white">No active source</h2>
-                            <p class="mt-2 max-w-md text-sm text-slate-400">Upload a recorded stream or connect a live feed to start the integrated analytics pipeline.</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="glass-panel rounded-[1.4rem] p-5">
-                    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <h3 class="display-font text-lg font-bold text-white">Operations Overview</h3>
-                            <p class="text-sm text-slate-400">Compact runtime and OCR readiness for live monitoring, without developer-only diagnostics</p>
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            <span id="detectorReadyBadge" class="ops-status-pill">Booting</span>
-                            <span id="serviceHealthSummary" class="ops-status-pill">Collecting status</span>
-                            <span id="aiWarningBanner" class="ops-status-pill">AI stack healthy</span>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-                        <div class="ops-kpi">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Stream FPS</p>
-                            <p id="streamFps" class="mt-2 text-2xl font-semibold text-blue-300">0.0</p>
-                        </div>
-                        <div class="ops-kpi">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Analytics FPS</p>
-                            <p id="analyticsFps" class="mt-2 text-2xl font-semibold text-cyan-300">0.0</p>
-                        </div>
-                        <div class="ops-kpi">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Inference Latency</p>
-                            <p id="inferenceLatency" class="mt-2 text-2xl font-semibold text-amber-300">0 ms</p>
-                        </div>
-                        <div class="ops-kpi">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Runtime Device</p>
-                            <p id="runtimeDevice" class="mt-2 text-2xl font-semibold text-emerald-300">cpu</p>
-                        </div>
-                    </div>
-                    <div class="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-3">
-                        <div class="ops-kpi xl:col-span-2">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">Plate Readiness</p>
-                            <p id="plateModelStatus" class="mt-2 text-sm text-slate-200">Waiting for model initialization</p>
-                        </div>
-                        <div class="ops-kpi">
-                            <p class="text-xs uppercase tracking-[0.22em] text-slate-500">OCR Mix</p>
-                            <p id="ocrSourceSummary" class="mt-2 text-sm text-slate-200">No OCR records yet</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                    <div class="glass-panel rounded-[1.4rem] p-5 xl:col-span-2">
-                        <div class="mb-4">
-                            <h3 class="display-font text-lg font-bold text-white">Traffic Trend</h3>
-                            <p class="text-sm text-slate-400">Live historical traffic behavior for the selected stream</p>
-                        </div>
-                        <div class="h-56">
-                            <canvas id="trafficTrendChart"></canvas>
-                        </div>
-                    </div>
-
-                    <div class="glass-panel rounded-[1.4rem] p-5">
-                        <div class="mb-4">
-                            <h3 class="display-font text-lg font-bold text-white">Traffic Insights</h3>
-                            <p class="text-sm text-slate-400">Peak load, crowd averages, and live vehicle mix</p>
-                        </div>
-                        <div class="grid grid-cols-2 gap-3 text-sm">
-                            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Peak Vehicles</p>
-                                <p id="peakVehicleMetric" class="mt-2 text-2xl font-semibold text-blue-300">0</p>
-                            </div>
-                            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Avg Vehicles</p>
-                                <p id="avgVehicleMetric" class="mt-2 text-2xl font-semibold text-cyan-300">0.0</p>
-                            </div>
-                            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Avg People</p>
-                                <p id="avgPeopleMetric" class="mt-2 text-2xl font-semibold text-emerald-300">0.0</p>
-                            </div>
-                            <div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-                                <p class="text-xs uppercase tracking-[0.2em] text-slate-500">Peak Zone Occupancy</p>
-                                <p id="peakZoneMetric" class="mt-2 text-2xl font-semibold text-amber-300">0</p>
-                            </div>
-                        </div>
-                        <div class="mt-4">
-                            <p class="mb-2 text-xs uppercase tracking-[0.2em] text-slate-500">Current Vehicle Mix</p>
-                            <div id="currentVehicleMix" class="flex flex-wrap gap-2"></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-                    <div class="glass-panel rounded-[1.4rem] p-5">
-                        <div class="mb-4 flex items-start justify-between gap-3">
-                            <div>
-                                <h3 class="display-font text-lg font-bold text-white">Recent ANPR Records</h3>
-                                <p class="text-sm text-slate-400">Searchable, production-facing plate history</p>
-                            </div>
-                            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                                <select id="plateQualityFilter" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
-                                    <option value="0.78">High Confidence</option>
-                                    <option value="0.65">Balanced</option>
-                                    <option value="0">All</option>
-                                </select>
-                                <select id="plateSourceFilter" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white">
-                                    <option value="">All Sources</option>
-                                    <option value="paddle">PaddleOCR</option>
-                                    <option value="easyocr">EasyOCR</option>
-                                    <option value="cloud">Cloud OCR</option>
-                                </select>
-                                <input id="plateSearch" type="text" placeholder="Search plate..." class="w-full sm:w-40 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
-                            </div>
-                        </div>
-                        <div id="plateRecords" class="table-shell text-sm text-slate-300"></div>
-                    </div>
-
-                    <div class="glass-panel rounded-[1.4rem] p-5">
-                        <div class="mb-4 flex items-start justify-between gap-3">
-                            <div>
-                                <h3 class="display-font text-lg font-bold text-white">Face Matches</h3>
-                                <p class="text-sm text-slate-400">Watchlist and identity events relevant to operators</p>
-                            </div>
-                            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
-                                    <input id="faceWatchlistOnly" type="checkbox" class="h-4 w-4">
-                                    Watchlist Only
-                                </label>
-                                <input id="faceSearch" type="text" placeholder="Search identity..." class="w-full sm:w-40 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
-                            </div>
-                        </div>
-                        <div id="faceRecords" class="table-shell text-sm text-slate-300"></div>
-                    </div>
-
-                    <div class="glass-panel rounded-[1.4rem] p-5">
-                        <div class="mb-4 flex items-start justify-between gap-3">
-                            <div>
-                                <h3 class="display-font text-lg font-bold text-white">Vehicle Records</h3>
-                                <p class="text-sm text-slate-400">Tracked vehicles and linked plates in the selected stream</p>
-                            </div>
-                            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                                <label class="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200">
-                                    <input id="vehicleRequirePlate" type="checkbox" class="h-4 w-4" checked>
-                                    With Plate
-                                </label>
-                                <input id="vehicleSearch" type="text" placeholder="Search tracker, plate, type..." class="w-full sm:w-40 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
-                            </div>
-                        </div>
-                        <div id="vehicleRecords" class="table-shell text-sm text-slate-300"></div>
-                    </div>
-                </div>
-
-                <details class="glass-panel rounded-[1.4rem] p-5">
-                    <summary class="cursor-pointer list-none flex items-center justify-between gap-3">
-                        <div>
-                            <h3 class="display-font text-lg font-bold text-white">Administration</h3>
-                            <p class="text-sm text-slate-400">Watchlist management is available here but kept out of the primary operator workflow</p>
-                        </div>
-                        <span class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300">Expand</span>
-                    </summary>
-                    <div class="mt-5">
-                        <div class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                            <div class="flex w-full flex-col gap-3 lg:w-auto lg:flex-row">
-                                <input id="watchlistName" type="text" placeholder="identity_name" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
-                                <input id="watchlistFile" type="file" accept="image/*" class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white file:mr-3 file:rounded-md file:border-0 file:bg-blue-600 file:px-3 file:py-2 file:text-white hover:file:bg-blue-500">
-                                <button onclick="submitWatchlistEntry()" class="rounded-lg border border-blue-500 bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-500">Add Identity</button>
-                            </div>
-                        </div>
-                        <div id="watchlistEntries" class="table-shell text-sm text-slate-300"></div>
-                    </div>
-                </details>
-            </div>
-
-            <aside class="lg:col-span-4 flex flex-col gap-6">
-                <div class="glass-panel rounded-[1.4rem] overflow-hidden">
-                    <div class="border-b border-slate-800 px-5 py-4">
-                        <div class="flex items-center justify-between gap-3">
-                            <div>
-                                <h3 class="display-font text-lg font-bold text-white">Operational Incidents</h3>
-                                <p class="text-sm text-slate-400">Watchlist hits, low-confidence plate reads, and actionable analytics anomalies</p>
-                            </div>
-                            <span id="incidentCountBadge" class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300">0 open</span>
-                        </div>
-                    </div>
-                    <div id="incidentRail" class="max-h-[28rem] overflow-y-auto px-5 py-4" aria-live="polite" aria-label="Operational incidents feed">
-                        <div class="incident-card incident-info">
-                            <p class="text-sm font-medium text-blue-200">No active incidents</p>
-                            <p class="mt-1 text-sm text-slate-300">Critical operator events will surface here as the pipeline processes traffic and face analytics.</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="glass-panel rounded-[1.4rem] flex max-h-[36rem] flex-col overflow-hidden">
-                    <div class="border-b border-slate-800 px-5 py-4">
-                        <div class="flex items-center justify-between gap-3">
-                            <div>
-                                <h3 class="display-font text-lg font-bold text-white">Live Activity</h3>
-                                <p class="text-sm text-slate-400">Search traffic, ANPR and face analytics events</p>
-                            </div>
-                            <span class="rounded-full border border-indigo-500/30 bg-indigo-500/15 px-3 py-1 text-xs text-indigo-200">Live</span>
-                        </div>
-                        <div class="mt-4">
-                            <input id="logSearch" type="text" placeholder="Search logs, plates, identities..." class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
-                        </div>
-                    </div>
-                    <div id="logContainer" class="flex-1 overflow-y-auto px-5 py-4">
-                        <div class="flex h-full flex-col items-center justify-center text-center text-slate-500">
-                            <p class="display-font text-lg text-slate-300">No events yet</p>
-                            <p class="mt-2 text-sm text-slate-500">Start a camera source to populate the live event stream.</p>
-                        </div>
-                    </div>
-                </div>
-            </aside>
-        </section>
-    </main>
-
     <script>
-        Chart.defaults.color = '#93a4c3';
-        Chart.defaults.font.family = 'IBM Plex Sans';
+        Chart.defaults.color = "#bdbdbd";
+        Chart.defaults.font.family = "IBM Plex Sans";
 
-        const vehicleChartElement = document.getElementById('vehicleChart');
-        const vehicleChart = vehicleChartElement ? new Chart(vehicleChartElement, {
-            type: 'bar',
+        const state = {
+            activeView: "monitor",
+            activeCamera: "",
+            ws: null,
+            live: null,
+            lastLiveLogs: [],
+            lastLiveLogSignature: "",
+            searchingLogs: false,
+            searchingPlates: false,
+            searchingFaces: false,
+            searchingVehicles: false,
+            lastTrafficRefreshAt: 0,
+        };
+
+        const nodes = {
+            statusDot: document.getElementById("statusIndicatorColor"),
+            statusText: document.getElementById("systemStatusText"),
+            cameraSelector: document.getElementById("cameraSelector"),
+            reportLink: document.getElementById("reportLink"),
+            maltegoExportLink: document.getElementById("maltegoExportLink"),
+            maltegoEntitySelector: document.getElementById("maltegoEntitySelector"),
+            videoPlayer: document.getElementById("videoPlayer"),
+            videoPlaceholder: document.getElementById("videoPlaceholder"),
+        };
+
+        const vehicleChart = new Chart(document.getElementById("vehicleChart"), {
+            type: "bar",
             data: {
-                labels: ['Car', 'Motorcycle', 'Bus', 'Truck'],
-                datasets: [{
-                    data: [0, 0, 0, 0],
-                    backgroundColor: ['#60a5fa', '#22d3ee', '#34d399', '#fbbf24'],
-                    borderRadius: 8,
-                    borderSkipped: false
-                }]
+                labels: ["Car", "Motorcycle", "Bus", "Truck"],
+                datasets: [{ data: [0, 0, 0, 0], backgroundColor: ["#d4d4d8", "#a1a1aa", "#71717a", "#52525b"] }],
             },
             options: {
                 animation: false,
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
-                scales: {
-                    x: { grid: { display: false } },
-                    y: { beginAtZero: true, grid: { color: 'rgba(148, 163, 184, 0.12)' } }
-                }
-            }
-        }) : null;
-
-        const genderChartElement = document.getElementById('genderChart');
-        const genderChart = genderChartElement ? new Chart(genderChartElement, {
-            type: 'doughnut',
-            data: {
-                labels: ['Man', 'Woman', 'Unknown'],
-                datasets: [{
-                    data: [0, 0, 0],
-                    backgroundColor: ['#3b82f6', '#f472b6', '#64748b'],
-                    borderWidth: 0
-                }]
+                scales: { x: { grid: { display: false } }, y: { beginAtZero: true } },
             },
-            options: {
-                animation: false,
-                maintainAspectRatio: false,
-                cutout: '68%',
-                plugins: { legend: { position: 'right' } }
-            }
-        }) : null;
+        });
 
-        const trafficTrendChartElement = document.getElementById('trafficTrendChart');
-        const trafficTrendChart = trafficTrendChartElement ? new Chart(trafficTrendChartElement, {
-            type: 'line',
+        const genderChart = new Chart(document.getElementById("genderChart"), {
+            type: "doughnut",
+            data: {
+                labels: ["Man", "Woman", "Unknown"],
+                datasets: [{ data: [0, 0, 0], backgroundColor: ["#e4e4e7", "#a1a1aa", "#52525b"], borderWidth: 0 }],
+            },
+            options: { animation: false, maintainAspectRatio: false, cutout: "68%", plugins: { legend: { position: "right" } } },
+        });
+
+        const trafficTrendChart = new Chart(document.getElementById("trafficTrendChart"), {
+            type: "line",
             data: {
                 labels: [],
                 datasets: [
-                    {
-                        label: 'Vehicles',
-                        data: [],
-                        borderColor: '#60a5fa',
-                        backgroundColor: 'rgba(96, 165, 250, 0.18)',
-                        tension: 0.25,
-                        fill: true,
-                        pointRadius: 0
-                    },
-                    {
-                        label: 'People',
-                        data: [],
-                        borderColor: '#34d399',
-                        backgroundColor: 'rgba(52, 211, 153, 0.12)',
-                        tension: 0.25,
-                        fill: true,
-                        pointRadius: 0
-                    }
-                ]
+                    { label: "Vehicles", data: [], borderColor: "#e4e4e7", backgroundColor: "rgba(228,228,231,0.12)", fill: true, pointRadius: 0, tension: 0.24 },
+                    { label: "People", data: [], borderColor: "#a1a1aa", backgroundColor: "rgba(161,161,170,0.08)", fill: true, pointRadius: 0, tension: 0.24 },
+                ],
             },
-            options: {
-                animation: false,
-                maintainAspectRatio: false,
-                interaction: { intersect: false, mode: 'index' },
-                plugins: { legend: { position: 'top' } },
-                scales: {
-                    x: { grid: { color: 'rgba(148, 163, 184, 0.08)' } },
-                    y: { beginAtZero: true, grid: { color: 'rgba(148, 163, 184, 0.12)' } }
-                }
-            }
-        }) : null;
+            options: { animation: false, maintainAspectRatio: false, interaction: { mode: "index", intersect: false } },
+        });
 
-        let activeCamera = '';
-        let ws = null;
-        let isSearchingLogs = false;
-        let isSearchingPlates = false;
-        let isSearchingFaces = false;
-        let isSearchingVehicles = false;
-        let lastLiveLogs = [];
-        let lastLiveLogSignature = '';
-        let lastVehicleChartData = [0, 0, 0, 0];
-        let lastGenderChartData = [0, 0, 0];
-        let lastTrendSignature = '';
-        let lastTrafficRefreshAt = 0;
-        let lastLiveState = null;
-        let lastHealthSignature = '';
+        function byId(id) { return document.getElementById(id); }
 
-        const statusColor = document.getElementById('statusIndicatorColor');
-        const statusPing = document.getElementById('statusIndicatorPing');
-        const statusText = document.getElementById('systemStatusText');
-        const reportLink = document.getElementById('reportLink');
-        const maltegoExportLink = document.getElementById('maltegoExportLink');
-        const maltegoEntitySelector = document.getElementById('maltegoEntitySelector');
-        const cameraSelector = document.getElementById('cameraSelector');
-
-        function clearNode(node) {
-            while (node.firstChild) {
-                node.removeChild(node.firstChild);
-            }
-        }
+        function clearNode(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
         function createNode(tag, className, text) {
-            const node = document.createElement(tag);
-            if (className) {
-                node.className = className;
-            }
-            if (text !== undefined) {
-                node.textContent = text;
-            }
-            return node;
+            const n = document.createElement(tag);
+            if (className) n.className = className;
+            if (text !== undefined) n.textContent = text;
+            return n;
         }
 
-        function setSystemStatus(text, connected = false) {
-            statusText.textContent = text;
-            statusColor.classList.toggle('bg-emerald-500', connected);
-            statusColor.classList.toggle('bg-rose-500', !connected);
-            statusPing.classList.toggle('hidden', !connected);
+        function switchView(view) {
+            state.activeView = view;
+            document.querySelectorAll(".view").forEach((section) => {
+                section.classList.toggle("active", section.id === `view-${view}`);
+            });
+            document.querySelectorAll("[data-view]").forEach((button) => {
+                button.classList.toggle("active", button.getAttribute("data-view") === view);
+            });
         }
 
-        function updateReportLink() {
-            const selectedEntity = maltegoEntitySelector?.value || 'faces';
-            if (!activeCamera) {
-                reportLink.href = '#';
-                reportLink.classList.add('pointer-events-none', 'opacity-50');
-                reportLink.setAttribute('aria-disabled', 'true');
-                maltegoExportLink.href = '#';
-                maltegoExportLink.classList.add('pointer-events-none', 'opacity-50');
-                maltegoExportLink.setAttribute('aria-disabled', 'true');
-                return;
+        function setSystemStatus(text, ok) {
+            nodes.statusText.textContent = text;
+            nodes.statusDot.classList.toggle("bg-emerald-500", !!ok);
+            nodes.statusDot.classList.toggle("bg-rose-500", !ok);
+        }
+
+        function updateSystemStats(payload) {
+            byId("cpuGauge").textContent = `${Math.round(payload.cpu_percent || 0)}%`;
+            byId("memGauge").textContent = `${Math.round(payload.memory_percent || 0)}%`;
+            if (payload.gpu_available) {
+                byId("gpuGauge").textContent = `${Math.round(payload.gpu_percent || 0)}%`;
+            } else {
+                byId("gpuGauge").textContent = "N/A";
             }
-            reportLink.href = `/api/reports/download?camera_id=${encodeURIComponent(activeCamera)}`;
-            reportLink.classList.remove('pointer-events-none', 'opacity-50');
-            reportLink.removeAttribute('aria-disabled');
-            maltegoExportLink.href = `/api/export/maltego?camera_id=${encodeURIComponent(activeCamera)}&entity=${encodeURIComponent(selectedEntity)}`;
-            maltegoExportLink.classList.remove('pointer-events-none', 'opacity-50');
-            maltegoExportLink.removeAttribute('aria-disabled');
-        }
-
-        function addCameraToDropdown(cameraId, selectIt = false) {
-            let option = Array.from(cameraSelector.options).find(item => item.value === cameraId);
-            if (!option) {
-                option = document.createElement('option');
-                option.value = cameraId;
-                option.textContent = cameraId;
-                cameraSelector.appendChild(option);
-            }
-            if (selectIt) {
-                cameraSelector.value = cameraId;
-                switchCamera(cameraId);
-            }
-        }
-
-        function renderEmptyState(containerId, title, detail) {
-            const container = document.getElementById(containerId);
-            clearNode(container);
-            const wrapper = createNode('div', 'flex h-full min-h-[110px] flex-col items-center justify-center text-center text-slate-500');
-            wrapper.appendChild(createNode('p', 'display-font text-base text-slate-300', title));
-            wrapper.appendChild(createNode('p', 'mt-2 text-sm text-slate-500', detail));
-            container.appendChild(wrapper);
-        }
-
-        function arraysEqual(left, right) {
-            if (left.length !== right.length) return false;
-            return left.every((value, index) => value === right[index]);
         }
 
         function getLogSignature(logs) {
-            if (!logs || logs.length === 0) return '0';
+            if (!logs || logs.length === 0) return "0";
             const first = logs[0];
-            return `${logs.length}:${first.time || ''}:${first.type || ''}:${first.detail || ''}`;
+            return `${logs.length}:${first.time || ""}:${first.type || ""}:${first.detail || ""}`;
         }
 
-        function syncLiveLogs(logs) {
-            lastLiveLogs = logs || [];
-            lastLiveLogSignature = getLogSignature(lastLiveLogs);
-            renderLogs(lastLiveLogs);
+        async function fetchJSON(url) {
+            const res = await fetch(url);
+            if (!res.ok) {
+                const payload = await res.json().catch(() => ({}));
+                throw new Error(payload.detail || `Request failed: ${res.status}`);
+            }
+            return res.json();
+        }
+
+        function renderEmptyState(containerId, title, detail) {
+            const container = byId(containerId);
+            clearNode(container);
+            const wrap = createNode("div", "text-center text-slate-500 py-8");
+            wrap.appendChild(createNode("p", "text-lg text-slate-300", title));
+            wrap.appendChild(createNode("p", "text-sm mt-1", detail));
+            container.appendChild(wrap);
         }
 
         function renderLogs(logs) {
-            const container = document.getElementById('logContainer');
+            const container = byId("logContainer");
             if (!logs || logs.length === 0) {
-                renderEmptyState('logContainer', 'No events found', 'The log will populate once the pipeline emits analytics events.');
+                renderEmptyState("logContainer", "No events", "The activity stream will appear when analytics events are emitted.");
                 return;
             }
             clearNode(container);
-            logs.forEach(log => {
-                let colorClass = 'border-purple-400/20 bg-purple-400/10 text-purple-300';
-                if (log.type === 'ANPR Match') {
-                    colorClass = 'border-amber-400/20 bg-amber-400/10 text-amber-300';
-                } else if (log.type === 'Watchlist Alert') {
-                    colorClass = 'border-red-500/20 bg-red-500/10 text-red-300';
-                }
-                const timeValue = String(log.time || '');
-                const timeText = timeValue.includes('T') ? timeValue.split('T')[1].slice(0, 8) : timeValue.slice(-8);
-                const item = createNode('div', `mb-3 rounded-2xl border ${colorClass} p-3`);
-                const header = createNode('div', 'mb-1 flex items-start justify-between gap-3');
-                header.appendChild(createNode('span', 'font-semibold text-white', log.type || 'Event'));
-                header.appendChild(createNode('span', 'text-xs text-slate-400', timeText));
-                item.appendChild(header);
-                item.appendChild(createNode('p', 'text-sm text-slate-300', log.detail || ''));
-                container.appendChild(item);
+            logs.forEach((log) => {
+                const panel = createNode("div", "incident mb-2");
+                if (log.type === "Watchlist Alert") panel.classList.add("critical");
+                if (log.type === "ANPR Match") panel.classList.add("warning");
+                panel.appendChild(createNode("p", "font-semibold text-white", log.type || "Event"));
+                panel.appendChild(createNode("p", "text-sm text-slate-300", log.detail || ""));
+                panel.appendChild(createNode("p", "text-xs text-slate-500 mt-1", (log.time || "").toString().slice(-8)));
+                container.appendChild(panel);
             });
         }
 
-        function renderIncidentRail(state) {
-            const container = document.getElementById('incidentRail');
-            const badge = document.getElementById('incidentCountBadge');
-            if (!container || !badge) {
-                return;
-            }
-
+        function renderIncidentRail(live) {
+            const rail = byId("incidentRail");
+            const badge = byId("incidentCountBadge");
             const incidents = [];
-            const faces = Array.isArray(state?.recent_faces) ? state.recent_faces : [];
-            const plates = Array.isArray(state?.recent_plates) ? state.recent_plates : [];
-            const logs = Array.isArray(state?.event_logs) ? state.event_logs : [];
-            const pendingPlates = Array.isArray(state?.pending_plates) ? state.pending_plates : [];
-
-            faces.filter(item => item.watchlist_hit).slice(0, 3).forEach(item => {
-                incidents.push({
-                    severity: 'critical',
-                    title: item.identity || 'Watchlist match',
-                    detail: `Watchlist hit${item.age ? ` | age ${item.age}` : ''}${item.gender ? ` | ${item.gender}` : ''}`,
-                    meta: item.last_seen || item.time || 'recent'
-                });
+            (live.recent_faces || []).filter((x) => x.watchlist_hit).slice(0, 4).forEach((x) => {
+                incidents.push({ severity: "critical", title: x.identity || "Watchlist hit", detail: `Face match ${x.gender || "Unknown"}` });
             });
-
-            plates.slice(0, 5).forEach(item => {
-                const confidence = Number(item.confidence || 0);
-                if (!item.plate_text || confidence < 0.78) {
-                    incidents.push({
-                        severity: 'warning',
-                        title: item.plate_text || 'Plate requires review',
-                        detail: item.plate_text
-                            ? `Low-confidence ANPR read for ${item.vehicle_type || 'vehicle'}`
-                            : `Plate still being resolved for ${item.vehicle_type || 'vehicle'}`,
-                        meta: item.last_seen || item.time || `confidence ${confidence.toFixed(2)}`
-                    });
+            (live.recent_plates || []).slice(0, 5).forEach((x) => {
+                const confidence = Number(x.confidence || 0);
+                if (!x.plate_text || confidence < 0.78) {
+                    incidents.push({ severity: "warning", title: x.plate_text || "Plate review", detail: `Confidence ${confidence.toFixed(2)}` });
                 }
             });
-
-            pendingPlates.slice(0, 4).forEach(item => {
-                incidents.push({
-                    severity: 'warning',
-                    title: item.candidate_text || `Tracker #${item.tracker_id}`,
-                    detail: `ANPR pending confirmation | hits ${item.hits || 0} | source ${item.source || 'unknown'}`,
-                    meta: item.time || `confidence ${(Number(item.confidence || 0)).toFixed(2)}`
-                });
-            });
-
-            logs.filter(item => item.type === 'Watchlist Alert' || item.type === 'ANPR Match').slice(0, 4).forEach(item => {
-                incidents.push({
-                    severity: item.type === 'Watchlist Alert' ? 'critical' : 'info',
-                    title: item.type || 'Operational event',
-                    detail: item.detail || 'Event emitted by the analytics pipeline.',
-                    meta: item.time || 'recent'
-                });
-            });
-
-            const topIncidents = incidents.slice(0, 6);
-            if (topIncidents.length === 0) {
-                badge.className = 'rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300';
-                badge.textContent = '0 open';
-                container.innerHTML = [
-                    '<div class="incident-card incident-info">',
-                    '<p class="text-sm font-medium text-blue-200">No active incidents</p>',
-                    '<p class="mt-1 text-sm text-slate-300">Critical operator events will surface here as the pipeline processes traffic and face analytics.</p>',
-                    '</div>'
-                ].join('');
+            const top = incidents.slice(0, 6);
+            badge.textContent = `${top.length} open`;
+            clearNode(rail);
+            if (top.length === 0) {
+                rail.appendChild(createNode("div", "incident", "No active incidents."));
                 return;
             }
-
-            const hasCritical = topIncidents.some(item => item.severity === 'critical');
-            badge.className = hasCritical
-                ? 'rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs text-rose-200'
-                : 'rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-200';
-            badge.textContent = `${topIncidents.length} open`;
-            container.innerHTML = topIncidents.map(item => {
-                const panelClass = item.severity === 'critical'
-                    ? 'incident-card incident-critical'
-                    : (item.severity === 'warning' ? 'incident-card incident-warning' : 'incident-card incident-info');
-                return [
-                    `<div class="${panelClass}">`,
-                    `<p class="text-sm font-medium text-white">${item.title}</p>`,
-                    `<p class="mt-1 text-sm text-slate-300">${item.detail}</p>`,
-                    `<p class="mt-2 text-xs uppercase tracking-[0.18em] text-slate-400">${item.meta}</p>`,
-                    '</div>'
-                ].join('');
-            }).join('');
+            top.forEach((it) => {
+                const card = createNode("div", `incident ${it.severity === "critical" ? "critical" : "warning"}`);
+                card.appendChild(createNode("p", "font-semibold text-white", it.title));
+                card.appendChild(createNode("p", "text-sm text-slate-300", it.detail));
+                rail.appendChild(card);
+            });
         }
 
         function renderPlateRecords(records) {
-            const container = document.getElementById('plateRecords');
+            const container = byId("plateRecords");
             if (!records || records.length === 0) {
-                renderEmptyState('plateRecords', 'No plate records', 'Detected number plates will appear here and remain searchable.');
+                renderEmptyState("plateRecords", "No plate records", "Detected number plates will appear here.");
                 return;
             }
             clearNode(container);
-            records.forEach(record => {
-                const row = createNode('div', 'record-row');
-                const header = createNode('div', 'flex items-center justify-between gap-3');
-                header.appendChild(createNode('span', 'display-font text-base font-bold text-amber-300', record.plate_text || 'Unknown'));
-                header.appendChild(createNode('span', 'rounded-full border border-amber-400/20 bg-amber-400/10 px-2 py-1 text-xs text-amber-200', record.vehicle_type || 'Unknown'));
-                row.appendChild(header);
-                row.appendChild(createNode('div', 'text-xs text-slate-400', `Last seen: ${record.last_seen || record.time || 'N/A'}`));
+            records.forEach((r) => {
+                const row = createNode("div", "record-row");
+                row.appendChild(createNode("p", "font-semibold text-amber-300", r.plate_text || "Unknown"));
+                row.appendChild(createNode("p", "text-sm text-slate-300", `${r.vehicle_type || "Unknown"} | ${r.last_seen || r.time || "N/A"}`));
                 container.appendChild(row);
             });
         }
 
         function renderFaceRecords(records) {
-            const container = document.getElementById('faceRecords');
+            const container = byId("faceRecords");
             if (!records || records.length === 0) {
-                renderEmptyState('faceRecords', 'No face records', 'Watchlist matches and face analytics results will appear here.');
+                renderEmptyState("faceRecords", "No face records", "Watchlist and face analytics will appear here.");
                 return;
             }
             clearNode(container);
-            records.forEach(record => {
-                const watchlist = record.watchlist_hit ? 'Watchlist Hit' : 'Anonymous';
-                const identity = record.identity || 'Anonymous';
-                const badgeClass = record.watchlist_hit
-                    ? 'border-red-500/20 bg-red-500/10 text-red-200'
-                    : 'border-fuchsia-400/20 bg-fuchsia-400/10 text-fuchsia-200';
-                const row = createNode('div', 'record-row');
-                const header = createNode('div', 'flex items-center justify-between gap-3');
-                header.appendChild(createNode('span', 'display-font text-base font-bold text-white', identity));
-                header.appendChild(createNode('span', `rounded-full border px-2 py-1 text-xs ${badgeClass}`, watchlist));
-                row.appendChild(header);
-                row.appendChild(createNode('div', 'text-sm text-slate-300', record.age ? `${record.gender || 'Unknown'}, ${record.age}` : (record.gender || 'Unknown')));
-                row.appendChild(createNode('div', 'text-xs text-slate-400', `Last seen: ${record.last_seen || record.time || 'N/A'}`));
+            records.forEach((r) => {
+                const row = createNode("div", "record-row");
+                row.appendChild(createNode("p", "font-semibold text-white", r.identity || "Anonymous"));
+                row.appendChild(createNode("p", "text-sm text-slate-300", `${r.gender || "Unknown"}${r.age ? `, ${r.age}` : ""}`));
+                row.appendChild(createNode("p", "text-xs text-slate-500", r.last_seen || r.time || "N/A"));
                 container.appendChild(row);
             });
         }
 
         function renderVehicleRecords(records) {
-            const container = document.getElementById('vehicleRecords');
+            const container = byId("vehicleRecords");
             if (!records || records.length === 0) {
-                renderEmptyState('vehicleRecords', 'No vehicle records', 'Tracked vehicles and linked plates will appear here as the session progresses.');
+                renderEmptyState("vehicleRecords", "No vehicle records", "Vehicle tracker records will appear here.");
                 return;
             }
             clearNode(container);
-            records.forEach(record => {
-                const plate = record.plate_text || 'Plate pending';
-                const lastSeen = record.last_seen || record.time || 'N/A';
-                const row = createNode('div', 'record-row');
-                const header = createNode('div', 'flex items-center justify-between gap-3');
-                header.appendChild(createNode('span', 'display-font text-base font-bold text-white', `#${record.tracker_id}`));
-                header.appendChild(createNode('span', 'rounded-full border border-blue-400/20 bg-blue-400/10 px-2 py-1 text-xs text-blue-200', record.vehicle_type || 'Unknown'));
-                row.appendChild(header);
-                row.appendChild(createNode('div', 'text-sm text-slate-300', plate));
-                row.appendChild(createNode('div', 'text-xs text-slate-400', `Last seen: ${lastSeen}`));
+            records.forEach((r) => {
+                const row = createNode("div", "record-row");
+                row.appendChild(createNode("p", "font-semibold text-white", `#${r.tracker_id} ${r.vehicle_type || "Unknown"}`));
+                row.appendChild(createNode("p", "text-sm text-slate-300", r.plate_text || "Plate pending"));
+                row.appendChild(createNode("p", "text-xs text-slate-500", r.last_seen || r.time || "N/A"));
                 container.appendChild(row);
             });
-        }
-
-        function renderCurrentVehicleMix(vehicleCurrentTypes) {
-            const container = document.getElementById('currentVehicleMix');
-            clearNode(container);
-            const entries = Object.entries(vehicleCurrentTypes || {}).filter(([, count]) => Number(count) > 0);
-            if (entries.length === 0) {
-                container.appendChild(createNode('span', 'rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-400', 'No vehicles currently in frame'));
-                return;
-            }
-            entries.forEach(([vehicleType, count]) => {
-                container.appendChild(createNode('span', 'rounded-full border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-200', `${vehicleType}: ${count}`));
-            });
-        }
-
-        function updateTrafficTrend(history) {
-            if (!trafficTrendChart) {
-                return;
-            }
-            const labels = (history || []).map(item => (item.timestamp || '').slice(-8));
-            const vehicleSeries = (history || []).map(item => item.vehicle_count || 0);
-            const peopleSeries = (history || []).map(item => item.people_count || 0);
-            const signature = JSON.stringify([labels, vehicleSeries, peopleSeries]);
-            if (signature === lastTrendSignature) {
-                return;
-            }
-            lastTrendSignature = signature;
-            trafficTrendChart.data.labels = labels;
-            trafficTrendChart.data.datasets[0].data = vehicleSeries;
-            trafficTrendChart.data.datasets[1].data = peopleSeries;
-            trafficTrendChart.update('none');
-        }
-
-        function updateTrafficSummary(summary) {
-            document.getElementById('peakVehicleMetric').textContent = summary.peak_vehicle_count || 0;
-            document.getElementById('avgVehicleMetric').textContent = Number(summary.average_vehicle_count || 0).toFixed(1);
-            document.getElementById('avgPeopleMetric').textContent = Number(summary.average_people_count || 0).toFixed(1);
-            document.getElementById('peakZoneMetric').textContent = summary.peak_zone_count || 0;
-        }
-
-        function updateOcrSummary(summary) {
-            const node = document.getElementById('ocrSourceSummary');
-            const total = Number(summary?.total_reads || 0);
-            if (!total || !Array.isArray(summary?.sources) || summary.sources.length === 0) {
-                node.textContent = 'No OCR records yet';
-                return;
-            }
-            const label = summary.sources
-                .slice(0, 3)
-                .map(item => `${item.ocr_source}: ${item.reads}`)
-                .join(' | ');
-            node.textContent = `${label} (avg ${(summary.average_confidence || 0).toFixed(2)})`;
-        }
-
-        function updateHealthSummary(summary) {
-            const node = document.getElementById('serviceHealthSummary');
-            const signature = JSON.stringify(summary || {});
-            if (signature === lastHealthSignature) {
-                return;
-            }
-            lastHealthSignature = signature;
-            if (!summary) {
-                node.textContent = 'Health data unavailable';
-                return;
-            }
-            const statusBits = [];
-            const startup = summary.startup || {};
-            if (startup.phase) {
-                if (startup.phase === 'ready') {
-                    statusBits.push('startup ready');
-                } else if (startup.phase === 'error') {
-                    statusBits.push(`startup error${startup.error ? `: ${startup.error}` : ''}`);
-                } else {
-                    statusBits.push(`startup ${startup.phase}`);
-                }
-            }
-            statusBits.push(summary.detector_ready ? 'detector ready' : 'detector warming');
-            statusBits.push(summary.ocr_ready ? 'ocr ready' : 'ocr unavailable');
-            if (summary.detector_gpu_ready) {
-                statusBits.push(`detector gpu ${summary.device || 'ready'}`);
-            } else if (summary.cuda_available) {
-                statusBits.push('cuda detected, cpu fallback active');
-            } else {
-                statusBits.push('cpu mode');
-            }
-            if (summary.face_available) {
-                statusBits.push(summary.face_gpu_ready ? 'face gpu ready' : 'face cpu mode');
-            }
-            statusBits.push(`${summary.active_camera_count || 0} active camera${(summary.active_camera_count || 0) === 1 ? '' : 's'}`);
-            if (!summary.face_analyzer_ready && summary.face_available) {
-                statusBits.push('face analyzer warming');
-            }
-            if (Array.isArray(summary.warnings) && summary.warnings.length > 0) {
-                const primaryWarning = summary.warnings
-                    .slice()
-                    .sort((left, right) => {
-                        const rank = { error: 0, warning: 1, info: 2 };
-                        return (rank[left.severity] ?? 9) - (rank[right.severity] ?? 9);
-                    })[0];
-                if (primaryWarning?.message) {
-                    statusBits.push(`warning: ${primaryWarning.message}`);
-                }
-            }
-            node.textContent = statusBits.join(' | ');
-        }
-
-        function paintHealthTile(id, status, label, detail) {
-            const pill = document.getElementById(`${id}HealthPill`);
-            const detailNode = document.getElementById(`${id}HealthDetail`);
-            if (!pill || !detailNode) {
-                return;
-            }
-            const className = {
-                ok: 'health-pill health-pill-ok',
-                warn: 'health-pill health-pill-warn',
-                error: 'health-pill health-pill-error',
-                info: 'health-pill health-pill-info'
-            };
-            pill.className = className[status] || className.info;
-            pill.textContent = label;
-            detailNode.textContent = detail;
-        }
-
-        function formatModelLabel(modelValue) {
-            if (!modelValue) {
-                return 'Not configured';
-            }
-            const normalized = String(modelValue).replace(/\\/g, '/');
-            const parts = normalized.split('/').filter(Boolean);
-            if (parts.length === 0) {
-                return String(modelValue);
-            }
-            if (/^https?:/i.test(normalized) && parts.length >= 2) {
-                return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
-            }
-            return parts[parts.length - 1];
-        }
-
-        function setFact(id, value) {
-            const node = document.getElementById(id);
-            if (node) {
-                node.textContent = value;
-            }
-        }
-
-        function renderAiFacts(summary) {
-            const startup = summary?.startup || {};
-            setFact('startupPhaseFact', startup.phase || 'Unknown');
-            if (summary?.detector_gpu_ready) {
-                setFact('computePathFact', `GPU detector on ${summary.device || 'cuda'}`);
-            } else if (summary?.cuda_available) {
-                setFact('computePathFact', 'CUDA detected, CPU fallback active');
-            } else {
-                setFact('computePathFact', 'CPU only');
-            }
-            setFact('activeCamerasFact', `${summary?.active_camera_count || 0} active`);
-            const ocrTopology = [
-                summary?.paddle_ocr_ready ? 'PaddleOCR' : null,
-                summary?.easyocr_ready ? 'EasyOCR' : null,
-                summary?.cloud_ocr_ready ? 'Cloud' : null,
-            ].filter(Boolean);
-            setFact('ocrTopologyFact', ocrTopology.length > 0 ? ocrTopology.join(' -> ') : 'No OCR path ready');
-            setFact('detectorModelFact', formatModelLabel(summary?.models?.detector_model));
-            setFact('plateModelFact', formatModelLabel(summary?.models?.plate_model));
-        }
-
-        function renderAiWarnings(summary) {
-            const warnings = Array.isArray(summary?.warnings) ? summary.warnings.slice() : [];
-            const countPill = document.getElementById('warningCountPill');
-            const list = document.getElementById('aiWarningsList');
-            if (!countPill || !list) {
-                return;
-            }
-            warnings.sort((left, right) => {
-                const rank = { error: 0, warning: 1, info: 2 };
-                return (rank[left.severity] ?? 9) - (rank[right.severity] ?? 9);
-            });
-            if (warnings.length === 0) {
-                countPill.className = 'rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200';
-                countPill.textContent = '0 active';
-                list.innerHTML = [
-                    '<div class="warning-item">',
-                    '<p class="text-sm font-medium text-emerald-200">No active AI warnings</p>',
-                    '<p class="mt-1 text-sm text-slate-400">Detector, OCR, and face analytics are currently healthy.</p>',
-                    '</div>'
-                ].join('');
-                return;
-            }
-            countPill.className = 'rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-200';
-            countPill.textContent = `${warnings.length} active`;
-            list.innerHTML = warnings.map(item => {
-                const severityClass = {
-                    error: 'text-rose-200',
-                    warning: 'text-amber-200',
-                    info: 'text-blue-200'
-                }[item.severity] || 'text-slate-200';
-                const component = item.component ? item.component.replace(/_/g, ' ') : 'runtime';
-                const cameraLabel = item.camera_id ? ` | camera ${item.camera_id}` : '';
-                const cooldown = item.cooldown_seconds ? ` | cooldown ${Math.round(Number(item.cooldown_seconds))}s` : '';
-                return [
-                    '<div class="warning-item">',
-                    `<p class="text-sm font-medium ${severityClass}">${item.code || 'runtime_warning'}</p>`,
-                    `<p class="mt-1 text-sm text-slate-300">${item.message || 'Runtime warning present.'}</p>`,
-                    `<p class="mt-2 text-xs uppercase tracking-[0.18em] text-slate-500">${component}${cameraLabel}${cooldown}</p>`,
-                    '</div>'
-                ].join('');
-            }).join('');
-        }
-
-        function renderAiWarningBanner(summary) {
-            const node = document.getElementById('aiWarningBanner');
-            if (!node) {
-                return;
-            }
-            const warnings = Array.isArray(summary?.warnings) ? summary.warnings : [];
-            if (warnings.length === 0) {
-                node.className = 'rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200';
-                node.textContent = 'AI stack healthy';
-                return;
-            }
-            const primary = warnings.slice().sort((left, right) => {
-                const rank = { error: 0, warning: 1, info: 2 };
-                return (rank[left.severity] ?? 9) - (rank[right.severity] ?? 9);
-            })[0];
-            const styleMap = {
-                error: 'rounded-2xl border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-sm text-rose-200',
-                warning: 'rounded-2xl border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-sm text-amber-200',
-                info: 'rounded-2xl border border-blue-500/35 bg-blue-500/10 px-3 py-2 text-sm text-blue-200'
-            };
-            node.className = styleMap[primary?.severity] || styleMap.info;
-            node.textContent = `${warnings.length} issue${warnings.length === 1 ? '' : 's'}: ${primary?.message || 'Runtime warning present'}`;
-        }
-
-        function renderAiHealth(summary) {
-            if (!summary) {
-                return;
-            }
-            const startup = summary.startup || {};
-            paintHealthTile(
-                'detector',
-                summary.detector_ready ? 'ok' : (startup.phase === 'preloading-models' ? 'info' : 'error'),
-                summary.detector_ready ? 'Online' : (startup.phase === 'preloading-models' ? 'Loading' : 'Offline'),
-                summary.detector_ready
-                    ? `Primary YOLO detector ready on ${summary.detector_gpu_ready ? summary.device || 'gpu' : 'cpu'}.`
-                    : (startup.phase === 'preloading-models'
-                        ? 'Primary detector is still loading during startup.'
-                        : 'Primary detector is unavailable.')
-            );
-            paintHealthTile(
-                'plate',
-                summary.plate_detector_ready ? 'ok' : (summary.ocr_ready ? 'warn' : 'error'),
-                summary.plate_detector_ready ? 'Online' : (summary.ocr_ready ? 'Fallback' : 'Offline'),
-                summary.plate_detector_ready
-                    ? `Plate detector ready${summary.models?.plate_model ? ` using ${summary.models.plate_model}` : ''}.`
-                    : (summary.ocr_ready
-                        ? 'Plate detector is unavailable, but OCR fallback paths are active.'
-                        : 'Plate detector and all OCR fallback paths are unavailable.')
-            );
-            paintHealthTile(
-                'face',
-                summary.face_analyzer_ready ? 'ok' : (summary.face_available ? 'warn' : 'info'),
-                summary.face_analyzer_ready ? 'Online' : (summary.face_available ? 'Degraded' : 'Disabled'),
-                summary.face_analyzer_ready
-                    ? `Face analytics ready in ${summary.face_gpu_ready ? 'GPU' : 'CPU'} mode.`
-                    : (summary.face_available
-                        ? 'InsightFace is installed but the analyzer is not ready yet.'
-                        : 'Face analytics are not available in this environment.')
-            );
-            paintHealthTile(
-                'paddle',
-                summary.paddle_ocr_ready ? 'ok' : (summary.paddle_ocr_available ? 'warn' : 'info'),
-                summary.paddle_ocr_ready ? 'Online' : (summary.paddle_ocr_available ? 'Starting' : 'Missing'),
-                summary.paddle_ocr_ready
-                    ? 'PaddleOCR is ready for local plate reading.'
-                    : (summary.paddle_ocr_available
-                        ? 'PaddleOCR is installed but not ready yet.'
-                        : 'PaddleOCR is not installed or disabled.')
-            );
-            paintHealthTile(
-                'easy',
-                summary.easyocr_ready ? 'ok' : (summary.easyocr_available ? 'warn' : 'info'),
-                summary.easyocr_ready ? 'Online' : (summary.easyocr_available ? 'Starting' : 'Missing'),
-                summary.easyocr_ready
-                    ? 'EasyOCR is ready as a local fallback path.'
-                    : (summary.easyocr_available
-                        ? 'EasyOCR is installed but not ready yet.'
-                        : 'EasyOCR is not installed or disabled.')
-            );
-            const cooldownSeconds = Number(summary.cloud_ocr_cooldown_seconds || 0);
-            paintHealthTile(
-                'cloud',
-                summary.cloud_ocr_ready ? (cooldownSeconds > 0 ? 'warn' : 'ok') : 'info',
-                summary.cloud_ocr_ready ? (cooldownSeconds > 0 ? 'Cooling Down' : 'Standby') : 'Disabled',
-                summary.cloud_ocr_ready
-                    ? (cooldownSeconds > 0
-                        ? `Cloud fallback is enabled but cooling down for ${Math.round(cooldownSeconds)} seconds.`
-                        : 'Cloud OCR fallback is configured and ready if local OCR fails.')
-                    : 'Cloud OCR fallback is not configured.'
-            );
-            renderAiFacts(summary);
-            renderAiWarnings(summary);
-            renderAiWarningBanner(summary);
         }
 
         function renderWatchlist(entries) {
-            const container = document.getElementById('watchlistEntries');
+            const container = byId("watchlistEntries");
             if (!entries || entries.length === 0) {
-                renderEmptyState('watchlistEntries', 'No watchlist entries', 'Upload a face image to enable live watchlist matching.');
+                renderEmptyState("watchlistEntries", "No watchlist identities", "OSINT watchlist identities will appear here.");
                 return;
             }
             clearNode(container);
-            entries.forEach(entry => {
-                const row = createNode('div', 'record-row');
-                const header = createNode('div', 'flex items-center justify-between gap-3');
-                header.appendChild(createNode('span', 'display-font text-base font-bold text-white', entry.identity));
-                const button = createNode('button', 'rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200 transition hover:bg-rose-500/20', 'Delete');
-                button.addEventListener('click', () => deleteWatchlistEntry(entry.identity));
-                header.appendChild(button);
-                row.appendChild(header);
-                row.appendChild(createNode('div', 'text-xs text-slate-400', `File: ${entry.filename}`));
+            entries.forEach((entry) => {
+                const row = createNode("div", "record-row");
+                const top = createNode("div", "flex items-center justify-between");
+                top.appendChild(createNode("p", "font-semibold text-white", entry.identity || entry.global_id));
+                const delBtn = createNode("button", "rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200", "Delete");
+                delBtn.addEventListener("click", () => deleteOsintIdentity(entry.global_id));
+                top.appendChild(delBtn);
+                row.appendChild(top);
+                row.appendChild(createNode("p", "text-xs text-slate-500", `${entry.global_id} | ${entry.last_seen_ts || "N/A"}`));
                 container.appendChild(row);
             });
         }
 
-        async function fetchJSON(url) {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`Request failed: ${response.status}`);
-            }
-            return response.json();
-        }
-
-        async function loadCameras() {
-            try {
-                const data = await fetchJSON('/api/cameras');
-                data.cameras.forEach(camera => addCameraToDropdown(camera.camera_id));
-                if (!activeCamera && data.cameras.length > 0) {
-                    switchCamera(data.cameras[0].camera_id);
-                }
-            } catch (error) {
-                console.error('Failed to load cameras', error);
-            }
-        }
-
-        async function fetchHistoricalLogs(query = '') {
-            const params = new URLSearchParams();
-            if (query) params.set('query', query);
-            if (activeCamera) params.set('camera_id', activeCamera);
-            const data = await fetchJSON(`/api/logs/history?${params.toString()}`);
-            renderLogs(data.logs);
-        }
-
-        async function fetchPlateHistory(query = '') {
-            const params = new URLSearchParams();
-            params.set('limit', '25');
-            if (query) params.set('query', query);
-            if (activeCamera) params.set('camera_id', activeCamera);
-            const minConfidence = document.getElementById('plateQualityFilter')?.value || '0.78';
-            const sourceFilter = document.getElementById('plateSourceFilter')?.value || '';
-            params.set('min_confidence', minConfidence);
-            if (sourceFilter) {
-                params.set('ocr_source', sourceFilter);
-            }
-            const data = await fetchJSON(`/api/records/plates?${params.toString()}`);
-            renderPlateRecords(data.records);
-        }
-
-        async function fetchFaceHistory(query = '') {
-            const params = new URLSearchParams();
-            params.set('limit', '25');
-            if (query) params.set('query', query);
-            if (activeCamera) params.set('camera_id', activeCamera);
-            if (document.getElementById('faceWatchlistOnly')?.checked) {
-                params.set('watchlist_only', 'true');
-            }
-            const data = await fetchJSON(`/api/records/faces?${params.toString()}`);
-            renderFaceRecords(data.records);
-        }
-
-        async function fetchVehicleHistory(query = '') {
-            const params = new URLSearchParams();
-            params.set('limit', '25');
-            if (query) params.set('query', query);
-            if (activeCamera) params.set('camera_id', activeCamera);
-            if (document.getElementById('vehicleRequirePlate')?.checked) {
-                params.set('require_plate', 'true');
-            }
-            const data = await fetchJSON(`/api/records/vehicles?${params.toString()}`);
-            renderVehicleRecords(data.records);
-        }
-
-        async function fetchMetricsHistory() {
-            if (!activeCamera) return;
-            const params = new URLSearchParams({ limit: '120', camera_id: activeCamera });
-            const data = await fetchJSON(`/api/metrics?${params.toString()}`);
-            updateTrafficTrend(data.history || []);
-        }
-
-        async function fetchTrafficAnalytics() {
-            if (!activeCamera) return;
-            const params = new URLSearchParams({ camera_id: activeCamera });
-            const data = await fetchJSON(`/api/analytics/traffic?${params.toString()}`);
-            updateTrafficSummary(data);
-        }
-
-        async function fetchOcrAnalytics() {
-            if (!activeCamera) {
-                updateOcrSummary({ total_reads: 0, average_confidence: 0, sources: [] });
+        function renderWatchlistFiles(entries) {
+            const container = byId("watchlistFiles");
+            if (!entries || entries.length === 0) {
+                renderEmptyState("watchlistFiles", "No legacy file entries", "Legacy watchlist file entries will appear here.");
                 return;
             }
-            const params = new URLSearchParams({ camera_id: activeCamera });
-            const data = await fetchJSON(`/api/analytics/ocr?${params.toString()}`);
-            updateOcrSummary(data);
+            clearNode(container);
+            entries.forEach((entry) => {
+                const row = createNode("div", "record-row");
+                const top = createNode("div", "flex items-center justify-between");
+                top.appendChild(createNode("p", "font-semibold text-white", entry.identity));
+                const delBtn = createNode("button", "rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200", "Delete");
+                delBtn.addEventListener("click", () => deleteLegacyWatchlist(entry.identity));
+                top.appendChild(delBtn);
+                row.appendChild(top);
+                row.appendChild(createNode("p", "text-xs text-slate-500", entry.filename));
+                container.appendChild(row);
+            });
         }
 
-        async function fetchHealthStatus() {
-            const data = await fetchJSON('/api/health');
-            updateHealthSummary(data);
-            renderAiHealth(data);
-        }
-
-        async function loadWatchlist() {
-            const data = await fetchJSON('/api/watchlist');
-            renderWatchlist(data.entries || []);
-        }
-
-        async function submitWatchlistEntry() {
-            const identity = document.getElementById('watchlistName').value.trim();
-            const fileInput = document.getElementById('watchlistFile');
-            const file = fileInput.files[0];
-            if (!identity || !file) {
-                alert('Provide both an identity name and an image file.');
+        function updateReportLinks() {
+            const entity = nodes.maltegoEntitySelector.value || "faces";
+            if (!state.activeCamera) {
+                nodes.reportLink.href = "#";
+                nodes.maltegoExportLink.href = "#";
                 return;
             }
-            const formData = new FormData();
-            formData.append('name', identity);
-            formData.append('file', file);
-            try {
-                const response = await fetch('/api/watchlist', { method: 'POST', body: formData });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Failed to add watchlist entry');
-                }
-                document.getElementById('watchlistName').value = '';
-                fileInput.value = '';
-                await loadWatchlist();
-            } catch (error) {
-                alert(error.message);
-            }
+            nodes.reportLink.href = `/api/reports/download?camera_id=${encodeURIComponent(state.activeCamera)}`;
+            nodes.maltegoExportLink.href = `/api/export/maltego?camera_id=${encodeURIComponent(state.activeCamera)}&entity=${encodeURIComponent(entity)}`;
         }
 
-        async function deleteWatchlistEntry(identity) {
-            try {
-                const response = await fetch(`/api/watchlist/${encodeURIComponent(identity)}`, { method: 'DELETE' });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Failed to delete watchlist entry');
-                }
-                await loadWatchlist();
-            } catch (error) {
-                alert(error.message);
-            }
-        }
+        function updateDashboard(live) {
+            state.live = live;
+            byId("vehicleCount").textContent = live.vehicle_count || 0;
+            byId("vehicleTotalCount").textContent = live.vehicle_total_count || 0;
+            byId("peopleCount").textContent = live.people_count || 0;
+            byId("crowdDensity").textContent = live.crowd_density || "Low";
+            byId("faceCount").textContent = live.faces_detected || 0;
+            byId("plateCount").textContent = live.plates_detected || 0;
+            byId("streamFps").textContent = Number(live.stream_fps || 0).toFixed(1);
+            byId("analyticsFps").textContent = Number(live.analytics_fps || 0).toFixed(1);
+            byId("inferenceLatency").textContent = `${Math.round(live.inference_latency_ms || 0)} ms`;
+            byId("runtimeDevice").textContent = live.device || "cpu";
 
-        function updateDashboard(state) {
-            lastLiveState = state;
-            document.getElementById('vehicleCount').textContent = state.vehicle_count || 0;
-            document.getElementById('vehicleTotalCount').textContent = state.vehicle_total_count || 0;
-            document.getElementById('peopleCount').textContent = state.people_count || 0;
-            document.getElementById('crowdDensity').textContent = state.crowd_density || 'Low';
-            document.getElementById('faceCount').textContent = state.faces_detected || 0;
-            document.getElementById('plateCount').textContent = state.plates_detected || 0;
-            document.getElementById('streamFps').textContent = (state.stream_fps || 0).toFixed(1);
-            document.getElementById('analyticsFps').textContent = (state.analytics_fps || 0).toFixed(1);
-            document.getElementById('inferenceLatency').textContent = `${Math.round(state.inference_latency_ms || 0)} ms`;
-            document.getElementById('runtimeDevice').textContent = state.device || 'cpu';
-            document.getElementById('plateModelStatus').textContent = state.plate_detector_ready
-                ? `Ready (${state.plate_model || 'model'})`
-                : (state.paddle_ocr_ready
-                    ? 'Detector unavailable, PaddleOCR fallback active'
-                    : (state.easyocr_ready
-                        ? 'Detector unavailable, EasyOCR fallback active'
-                        : (state.cloud_ocr_ready
-                            ? `Cloud OCR fallback active${(state.cloud_ocr_cooldown_seconds || 0) > 0 ? ` (cooldown ${Math.round(state.cloud_ocr_cooldown_seconds)}s)` : ''}`
-                            : `Unavailable (${state.plate_model || 'not configured'})`)));
-            const detectorBadge = document.getElementById('detectorReadyBadge');
-            if (state.plate_detector_ready) {
-                detectorBadge.textContent = 'Plate Detector Ready';
-                detectorBadge.className = 'rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200';
-            } else if (state.ocr_fallback_ready) {
-                detectorBadge.textContent = 'Fallback OCR Active';
-                detectorBadge.className = 'rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-200';
-            } else {
-                detectorBadge.textContent = 'Plate OCR Limited';
-                detectorBadge.className = 'rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-200';
-            }
             const vehicleData = [
-                state.vehicle_types?.car || 0,
-                state.vehicle_types?.motorcycle || 0,
-                state.vehicle_types?.bus || 0,
-                state.vehicle_types?.truck || 0
+                live.vehicle_types?.car || 0,
+                live.vehicle_types?.motorcycle || 0,
+                live.vehicle_types?.bus || 0,
+                live.vehicle_types?.truck || 0,
             ];
-            if (vehicleChart && !arraysEqual(lastVehicleChartData, vehicleData)) {
-                lastVehicleChartData = vehicleData;
-                vehicleChart.data.datasets[0].data = vehicleData;
-                vehicleChart.update('none');
-            }
+            vehicleChart.data.datasets[0].data = vehicleData;
+            vehicleChart.update("none");
+
             const genderData = [
-                state.gender_stats?.Man || 0,
-                state.gender_stats?.Woman || 0,
-                state.gender_stats?.Unknown || 0
+                live.gender_stats?.Man || 0,
+                live.gender_stats?.Woman || 0,
+                live.gender_stats?.Unknown || 0,
             ];
-            if (genderChart && !arraysEqual(lastGenderChartData, genderData)) {
-                lastGenderChartData = genderData;
-                genderChart.data.datasets[0].data = genderData;
-                genderChart.update('none');
-            }
-            renderCurrentVehicleMix(state.vehicle_current_types || {});
-            renderIncidentRail(state);
-            if (!isSearchingPlates) {
-                renderPlateRecords(state.recent_plates || []);
-            }
-            if (!isSearchingFaces) {
-                renderFaceRecords(state.recent_faces || []);
-            }
-            if (!isSearchingVehicles) {
-                renderVehicleRecords(state.recent_vehicles || []);
-            }
-            if (!isSearchingLogs) {
-                const nextLogs = state.event_logs || [];
-                const nextSignature = getLogSignature(nextLogs);
-                if (nextSignature !== lastLiveLogSignature) {
-                    syncLiveLogs(nextLogs);
+            genderChart.data.datasets[0].data = genderData;
+            genderChart.update("none");
+
+            renderIncidentRail(live);
+
+            if (!state.searchingPlates) renderPlateRecords(live.recent_plates || []);
+            if (!state.searchingFaces) renderFaceRecords(live.recent_faces || []);
+            if (!state.searchingVehicles) renderVehicleRecords(live.recent_vehicles || []);
+            if (!state.searchingLogs) {
+                const nextLogs = live.event_logs || [];
+                const sig = getLogSignature(nextLogs);
+                if (sig !== state.lastLiveLogSignature) {
+                    state.lastLiveLogSignature = sig;
+                    state.lastLiveLogs = nextLogs;
+                    renderLogs(nextLogs);
                 }
             }
+
             const now = Date.now();
-            if (activeCamera && now - lastTrafficRefreshAt >= 10000) {
-                lastTrafficRefreshAt = now;
+            if (state.activeCamera && now - state.lastTrafficRefreshAt > 10000) {
+                state.lastTrafficRefreshAt = now;
                 fetchMetricsHistory().catch(console.error);
                 fetchTrafficAnalytics().catch(console.error);
                 fetchOcrAnalytics().catch(console.error);
                 fetchHealthStatus().catch(console.error);
+                fetchSystemStats().catch(console.error);
             }
         }
 
         function connectWebSocket(cameraId) {
-            if (ws) {
-                ws.close();
-            }
+            if (state.ws) state.ws.close();
             if (!cameraId) {
-                setSystemStatus('Awaiting Source', false);
+                setSystemStatus("Awaiting Source", false);
                 return;
             }
-            const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-            ws = new WebSocket(`${protocol}://${location.host}/ws/analytics/${cameraId}`);
-            ws.onopen = () => setSystemStatus(`Streaming ${cameraId}`, true);
-            ws.onmessage = event => updateDashboard(JSON.parse(event.data));
-            ws.onclose = () => setSystemStatus('Connection Lost', false);
-            ws.onerror = () => setSystemStatus('Connection Error', false);
+            const protocol = location.protocol === "https:" ? "wss" : "ws";
+            state.ws = new WebSocket(`${protocol}://${location.host}/ws/analytics/${cameraId}`);
+            state.ws.onopen = () => setSystemStatus(`Streaming ${cameraId}`, true);
+            state.ws.onmessage = (event) => updateDashboard(JSON.parse(event.data));
+            state.ws.onclose = () => setSystemStatus("Connection Lost", false);
+            state.ws.onerror = () => setSystemStatus("Connection Error", false);
         }
 
         function switchCamera(cameraId) {
-            activeCamera = cameraId;
-            syncLiveLogs([]);
-            updateReportLink();
+            state.activeCamera = cameraId;
+            updateReportLinks();
             connectWebSocket(cameraId);
-            document.getElementById('videoPlayer').src = `/api/video/stream/${encodeURIComponent(cameraId)}`;
-            document.getElementById('videoPlayer').classList.remove('hidden');
-            document.getElementById('videoPlaceholder').classList.add('hidden');
-            if (document.getElementById('logSearch').value.trim()) {
-                fetchHistoricalLogs(document.getElementById('logSearch').value.trim()).catch(console.error);
-            }
-            fetchPlateHistory(document.getElementById('plateSearch').value.trim()).catch(console.error);
-            fetchFaceHistory(document.getElementById('faceSearch').value.trim()).catch(console.error);
-            fetchVehicleHistory(document.getElementById('vehicleSearch').value.trim()).catch(console.error);
+            nodes.videoPlayer.src = `/api/video/stream/${encodeURIComponent(cameraId)}`;
+            nodes.videoPlayer.classList.remove("hidden");
+            nodes.videoPlaceholder.classList.add("hidden");
+            fetchPlateHistory(byId("plateSearch").value.trim()).catch(console.error);
+            fetchFaceHistory(byId("faceSearch").value.trim()).catch(console.error);
+            fetchVehicleHistory(byId("vehicleSearch").value.trim()).catch(console.error);
             fetchMetricsHistory().catch(console.error);
             fetchTrafficAnalytics().catch(console.error);
             fetchOcrAnalytics().catch(console.error);
+            fetchHealthStatus().catch(console.error);
+            fetchSystemStats().catch(console.error);
         }
 
-        cameraSelector.addEventListener('change', event => {
-            if (event.target.value) {
-                switchCamera(event.target.value);
+        async function loadCameras() {
+            const payload = await fetchJSON("/api/cameras");
+            payload.cameras.forEach((camera) => {
+                if (Array.from(nodes.cameraSelector.options).some((item) => item.value === camera.camera_id)) return;
+                const option = document.createElement("option");
+                option.value = camera.camera_id;
+                option.textContent = camera.camera_id;
+                nodes.cameraSelector.appendChild(option);
+            });
+            if (!state.activeCamera && payload.cameras.length > 0) {
+                nodes.cameraSelector.value = payload.cameras[0].camera_id;
+                switchCamera(payload.cameras[0].camera_id);
             }
-        });
+        }
 
-        maltegoEntitySelector?.addEventListener('change', () => {
-            updateReportLink();
-        });
+        async function fetchHistoricalLogs(query) {
+            const params = new URLSearchParams();
+            if (query) params.set("query", query);
+            if (state.activeCamera) params.set("camera_id", state.activeCamera);
+            const payload = await fetchJSON(`/api/logs/history?${params.toString()}`);
+            renderLogs(payload.logs || []);
+        }
+
+        async function fetchPlateHistory(query = "") {
+            const params = new URLSearchParams({ limit: "25" });
+            if (query) params.set("query", query);
+            if (state.activeCamera) params.set("camera_id", state.activeCamera);
+            params.set("min_confidence", byId("plateQualityFilter").value || "0.78");
+            const source = byId("plateSourceFilter").value || "";
+            if (source) params.set("ocr_source", source);
+            const payload = await fetchJSON(`/api/records/plates?${params.toString()}`);
+            renderPlateRecords(payload.records || []);
+        }
+
+        async function fetchFaceHistory(query = "") {
+            const params = new URLSearchParams({ limit: "25" });
+            if (query) params.set("query", query);
+            if (state.activeCamera) params.set("camera_id", state.activeCamera);
+            if (byId("faceWatchlistOnly").checked) params.set("watchlist_only", "true");
+            const payload = await fetchJSON(`/api/records/faces?${params.toString()}`);
+            renderFaceRecords(payload.records || []);
+        }
+
+        async function fetchVehicleHistory(query = "") {
+            const params = new URLSearchParams({ limit: "25" });
+            if (query) params.set("query", query);
+            if (state.activeCamera) params.set("camera_id", state.activeCamera);
+            if (byId("vehicleRequirePlate").checked) params.set("require_plate", "true");
+            const payload = await fetchJSON(`/api/records/vehicles?${params.toString()}`);
+            renderVehicleRecords(payload.records || []);
+        }
+
+        async function fetchMetricsHistory() {
+            if (!state.activeCamera) return;
+            const payload = await fetchJSON(`/api/metrics?limit=120&camera_id=${encodeURIComponent(state.activeCamera)}`);
+            const history = payload.history || [];
+            trafficTrendChart.data.labels = history.map((x) => (x.timestamp || "").slice(-8));
+            trafficTrendChart.data.datasets[0].data = history.map((x) => x.vehicle_count || 0);
+            trafficTrendChart.data.datasets[1].data = history.map((x) => x.people_count || 0);
+            trafficTrendChart.update("none");
+        }
+
+        async function fetchTrafficAnalytics() {
+            if (!state.activeCamera) return;
+            const payload = await fetchJSON(`/api/analytics/traffic?camera_id=${encodeURIComponent(state.activeCamera)}`);
+            byId("peakVehicleMetric").textContent = payload.peak_vehicle_count || 0;
+            byId("avgVehicleMetric").textContent = Number(payload.average_vehicle_count || 0).toFixed(1);
+            byId("avgPeopleMetric").textContent = Number(payload.average_people_count || 0).toFixed(1);
+            byId("peakZoneMetric").textContent = payload.peak_zone_count || 0;
+        }
+
+        async function fetchOcrAnalytics() {
+            if (!state.activeCamera) return;
+            const payload = await fetchJSON(`/api/analytics/ocr?camera_id=${encodeURIComponent(state.activeCamera)}`);
+            const total = Number(payload.total_reads || 0);
+            if (!total || !Array.isArray(payload.sources) || payload.sources.length === 0) {
+                byId("ocrSourceSummary").textContent = "No OCR records yet";
+                return;
+            }
+            const top = payload.sources.slice(0, 3).map((s) => `${s.ocr_source}: ${s.reads}`).join(" | ");
+            byId("ocrSourceSummary").textContent = `${top} (avg ${(payload.average_confidence || 0).toFixed(2)})`;
+        }
+
+        async function fetchHealthStatus() {
+            const payload = await fetchJSON("/api/health");
+            const statusBits = [];
+            statusBits.push(payload.detector_ready ? "detector ready" : "detector warming");
+            statusBits.push(payload.ocr_ready ? "ocr ready" : "ocr unavailable");
+            statusBits.push(`${payload.active_camera_count || 0} active camera${(payload.active_camera_count || 0) === 1 ? "" : "s"}`);
+            if (Array.isArray(payload.warnings) && payload.warnings.length > 0) {
+                statusBits.push(`warning: ${payload.warnings[0].message || "runtime warning"}`);
+            }
+            byId("serviceHealthSummary").textContent = statusBits.join(" | ");
+        }
+
+        async function fetchSystemStats() {
+            const payload = await fetchJSON("/api/system/stats");
+            updateSystemStats(payload);
+        }
+
+        async function loadWatchlist() {
+            const payload = await fetchJSON("/api/watchlist");
+            renderWatchlist(payload.entries || []);
+        }
+
+        async function loadWatchlistFiles() {
+            const payload = await fetchJSON("/api/watchlist/files");
+            renderWatchlistFiles(payload.entries || []);
+        }
+
+        function authHeader() {
+            const token = byId("adminToken").value.trim();
+            if (!token) return {};
+            return { Authorization: `Bearer ${token}` };
+        }
+
+        async function addOsintIdentity() {
+            const name = byId("watchlistName").value.trim();
+            const file = byId("watchlistFile").files[0];
+            if (!name || !file) {
+                alert("Provide identity name and image.");
+                return;
+            }
+            const formData = new FormData();
+            formData.append("name", name);
+            formData.append("file", file);
+            const res = await fetch("/api/watchlist", { method: "POST", body: formData, headers: authHeader() });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.detail || "Failed to add identity");
+            byId("watchlistName").value = "";
+            byId("watchlistFile").value = "";
+            await loadWatchlist();
+        }
+
+        async function deleteOsintIdentity(globalId) {
+            const token = byId("adminToken").value.trim();
+            if (!token) {
+                alert("Admin token required to delete identity. Deletion endpoint not exposed in current API.");
+                return;
+            }
+            alert("Delete for OSINT identity is not available from backend route yet.");
+        }
+
+        async function addLegacyWatchlist() {
+            const name = byId("watchlistFileName").value.trim();
+            const file = byId("watchlistRawFile").files[0];
+            if (!name || !file) {
+                alert("Provide identity and image.");
+                return;
+            }
+            const formData = new FormData();
+            formData.append("name", name);
+            formData.append("file", file);
+            const res = await fetch("/api/watchlist/files", { method: "POST", body: formData });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.detail || "Failed to add file watchlist entry");
+            byId("watchlistFileName").value = "";
+            byId("watchlistRawFile").value = "";
+            await loadWatchlistFiles();
+        }
+
+        async function deleteLegacyWatchlist(identity) {
+            const res = await fetch(`/api/watchlist/files/${encodeURIComponent(identity)}`, { method: "DELETE" });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.detail || "Failed to delete legacy watchlist entry");
+            await loadWatchlistFiles();
+        }
 
         async function submitNewCamera() {
-            const cameraId = document.getElementById('newCamId').value.trim();
-            const source = document.getElementById('newCamSource').value.trim();
+            const cameraId = byId("newCamId").value.trim();
+            const source = byId("newCamSource").value.trim();
             if (!cameraId || !source) {
-                alert('Provide both camera ID and source.');
+                alert("Provide both camera id and source.");
                 return;
             }
-            try {
-                const response = await fetch(`/api/cameras/add?camera_id=${encodeURIComponent(cameraId)}&source=${encodeURIComponent(source)}`, {
-                    method: 'POST'
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Failed to add camera');
-                }
-                addCameraToDropdown(payload.camera_id, true);
-                document.getElementById('addCameraModal').classList.add('hidden');
-                document.getElementById('newCamId').value = '';
-                document.getElementById('newCamSource').value = '';
-            } catch (error) {
-                alert(error.message);
+            const res = await fetch(`/api/cameras/add?camera_id=${encodeURIComponent(cameraId)}&source=${encodeURIComponent(source)}`, { method: "POST" });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload.detail || "Failed to add camera");
+
+            if (!Array.from(nodes.cameraSelector.options).some((x) => x.value === payload.camera_id)) {
+                const option = document.createElement("option");
+                option.value = payload.camera_id;
+                option.textContent = payload.camera_id;
+                nodes.cameraSelector.appendChild(option);
             }
+            nodes.cameraSelector.value = payload.camera_id;
+            switchCamera(payload.camera_id);
+            toggleAddCameraModal(false);
+            byId("newCamId").value = "";
+            byId("newCamSource").value = "";
         }
 
-        document.getElementById('videoFileInput').addEventListener('change', async event => {
-            const file = event.target.files[0];
-            if (!file) return;
-            document.getElementById('addCameraModal').classList.add('hidden');
-            const formData = new FormData();
-            formData.append('file', file);
-            try {
-                const response = await fetch('/api/video/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                    throw new Error(payload.detail || 'Upload failed');
+        function toggleAddCameraModal(show) {
+            const modal = byId("addCameraModal");
+            modal.classList.toggle("hidden", !show);
+            modal.classList.toggle("flex", !!show);
+        }
+
+        function wireViewButtons() {
+            document.querySelectorAll("[data-view]").forEach((button) => {
+                button.addEventListener("click", () => switchView(button.getAttribute("data-view")));
+            });
+        }
+
+        function wireSearchControls() {
+            let logTimeout;
+            byId("logSearch").addEventListener("input", (event) => {
+                const query = event.target.value.trim();
+                state.searchingLogs = query.length > 0;
+                clearTimeout(logTimeout);
+                if (!state.searchingLogs) {
+                    renderLogs(state.lastLiveLogs);
+                    return;
                 }
-                addCameraToDropdown(payload.camera_id, true);
-            } catch (error) {
-                alert(error.message);
-            } finally {
-                event.target.value = '';
-            }
-        });
+                logTimeout = setTimeout(() => fetchHistoricalLogs(query).catch(console.error), 240);
+            });
 
-        let logTimeout;
-        document.getElementById('logSearch').addEventListener('input', event => {
-            const query = event.target.value.trim();
-            isSearchingLogs = query.length > 0;
-            clearTimeout(logTimeout);
-            if (!isSearchingLogs) {
-                syncLiveLogs(lastLiveLogs);
-                return;
-            }
-            logTimeout = setTimeout(() => {
-                fetchHistoricalLogs(query).catch(console.error);
-            }, 250);
-        });
+            let plateTimeout;
+            byId("plateSearch").addEventListener("input", (event) => {
+                const query = event.target.value.trim();
+                state.searchingPlates = query.length > 0;
+                clearTimeout(plateTimeout);
+                plateTimeout = setTimeout(() => fetchPlateHistory(query).catch(console.error), 240);
+            });
+            byId("plateQualityFilter").addEventListener("change", () => fetchPlateHistory(byId("plateSearch").value.trim()).catch(console.error));
+            byId("plateSourceFilter").addEventListener("change", () => fetchPlateHistory(byId("plateSearch").value.trim()).catch(console.error));
 
-        let plateTimeout;
-        document.getElementById('plateSearch').addEventListener('input', event => {
-            const query = event.target.value.trim();
-            isSearchingPlates = query.length > 0;
-            clearTimeout(plateTimeout);
-            if (!isSearchingPlates && lastLiveState) {
-                renderPlateRecords(lastLiveState.recent_plates || []);
-            }
-            plateTimeout = setTimeout(() => {
-                fetchPlateHistory(query).catch(console.error);
-            }, 250);
-        });
+            let faceTimeout;
+            byId("faceSearch").addEventListener("input", (event) => {
+                const query = event.target.value.trim();
+                state.searchingFaces = query.length > 0;
+                clearTimeout(faceTimeout);
+                faceTimeout = setTimeout(() => fetchFaceHistory(query).catch(console.error), 240);
+            });
+            byId("faceWatchlistOnly").addEventListener("change", () => fetchFaceHistory(byId("faceSearch").value.trim()).catch(console.error));
 
-        document.getElementById('plateQualityFilter').addEventListener('change', () => {
-            fetchPlateHistory(document.getElementById('plateSearch').value.trim()).catch(console.error);
-        });
+            let vehicleTimeout;
+            byId("vehicleSearch").addEventListener("input", (event) => {
+                const query = event.target.value.trim();
+                state.searchingVehicles = query.length > 0;
+                clearTimeout(vehicleTimeout);
+                vehicleTimeout = setTimeout(() => fetchVehicleHistory(query).catch(console.error), 240);
+            });
+            byId("vehicleRequirePlate").addEventListener("change", () => fetchVehicleHistory(byId("vehicleSearch").value.trim()).catch(console.error));
+        }
 
-        document.getElementById('plateSourceFilter').addEventListener('change', () => {
-            fetchPlateHistory(document.getElementById('plateSearch').value.trim()).catch(console.error);
-        });
+        function wireModal() {
+            byId("openSourceModal").addEventListener("click", () => toggleAddCameraModal(true));
+            byId("cancelAddCamera").addEventListener("click", () => toggleAddCameraModal(false));
+            byId("saveAddCamera").addEventListener("click", () => submitNewCamera().catch((err) => alert(err.message)));
+            byId("uploadVideoBtn").addEventListener("click", () => byId("videoFileInput").click());
 
-        let faceTimeout;
-        document.getElementById('faceSearch').addEventListener('input', event => {
-            const query = event.target.value.trim();
-            isSearchingFaces = query.length > 0;
-            clearTimeout(faceTimeout);
-            if (!isSearchingFaces && lastLiveState) {
-                renderFaceRecords(lastLiveState.recent_faces || []);
-            }
-            faceTimeout = setTimeout(() => {
-                fetchFaceHistory(query).catch(console.error);
-            }, 250);
-        });
+            byId("videoFileInput").addEventListener("change", async (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const formData = new FormData();
+                formData.append("file", file);
+                const res = await fetch("/api/video/upload", { method: "POST", body: formData });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    alert(payload.detail || "Upload failed");
+                    event.target.value = "";
+                    return;
+                }
+                if (!Array.from(nodes.cameraSelector.options).some((x) => x.value === payload.camera_id)) {
+                    const option = document.createElement("option");
+                    option.value = payload.camera_id;
+                    option.textContent = payload.camera_id;
+                    nodes.cameraSelector.appendChild(option);
+                }
+                nodes.cameraSelector.value = payload.camera_id;
+                switchCamera(payload.camera_id);
+                toggleAddCameraModal(false);
+                event.target.value = "";
+            });
+        }
 
-        document.getElementById('faceWatchlistOnly').addEventListener('change', () => {
-            fetchFaceHistory(document.getElementById('faceSearch').value.trim()).catch(console.error);
-        });
+        function wireWatchlistTabs() {
+            const identitiesBtn = byId("watchTabIdentities");
+            const filesBtn = byId("watchTabFiles");
+            const identitiesPane = byId("watchlistIdentityPane");
+            const filesPane = byId("watchlistFilePane");
 
-        let vehicleTimeout;
-        document.getElementById('vehicleSearch').addEventListener('input', event => {
-            const query = event.target.value.trim();
-            isSearchingVehicles = query.length > 0;
-            clearTimeout(vehicleTimeout);
-            if (!isSearchingVehicles && lastLiveState) {
-                renderVehicleRecords(lastLiveState.recent_vehicles || []);
-            }
-            vehicleTimeout = setTimeout(() => {
-                fetchVehicleHistory(query).catch(console.error);
-            }, 250);
-        });
+            identitiesBtn.addEventListener("click", () => {
+                identitiesBtn.classList.add("active");
+                filesBtn.classList.remove("active");
+                identitiesPane.classList.remove("hidden");
+                filesPane.classList.add("hidden");
+            });
+            filesBtn.addEventListener("click", () => {
+                filesBtn.classList.add("active");
+                identitiesBtn.classList.remove("active");
+                filesPane.classList.remove("hidden");
+                identitiesPane.classList.add("hidden");
+            });
 
-        document.getElementById('vehicleRequirePlate').addEventListener('change', () => {
-            fetchVehicleHistory(document.getElementById('vehicleSearch').value.trim()).catch(console.error);
-        });
+            byId("addIdentityBtn").addEventListener("click", () => addOsintIdentity().catch((err) => alert(err.message)));
+            byId("addLegacyWatchlistBtn").addEventListener("click", () => addLegacyWatchlist().catch((err) => alert(err.message)));
+        }
 
-        renderEmptyState('plateRecords', 'No plate records', 'Detected number plates will appear here and remain searchable.');
-        renderEmptyState('faceRecords', 'No face records', 'Watchlist matches and face analytics results will appear here.');
-        renderEmptyState('vehicleRecords', 'No vehicle records', 'Tracked vehicles and linked plates will appear here as the session progresses.');
-        renderEmptyState('watchlistEntries', 'No watchlist entries', 'Upload a face image to enable live watchlist matching.');
-        updateReportLink();
-        loadCameras();
-        fetchHealthStatus().catch(console.error);
-        loadWatchlist().catch(console.error);
+        function wireTopControls() {
+            nodes.cameraSelector.addEventListener("change", (event) => {
+                if (event.target.value) switchCamera(event.target.value);
+            });
+            nodes.maltegoEntitySelector.addEventListener("change", updateReportLinks);
+        }
+
+        function bootstrap() {
+            wireViewButtons();
+            wireSearchControls();
+            wireModal();
+            wireWatchlistTabs();
+            wireTopControls();
+            renderEmptyState("logContainer", "No events", "The activity stream will appear when analytics events are emitted.");
+            renderEmptyState("plateRecords", "No plate records", "Detected number plates will appear here.");
+            renderEmptyState("faceRecords", "No face records", "Watchlist and face analytics will appear here.");
+            renderEmptyState("vehicleRecords", "No vehicle records", "Vehicle tracker records will appear here.");
+            renderEmptyState("watchlistEntries", "No watchlist identities", "OSINT watchlist identities will appear here.");
+            renderEmptyState("watchlistFiles", "No legacy file entries", "Legacy watchlist file entries will appear here.");
+
+            updateReportLinks();
+            loadCameras().catch(console.error);
+            loadWatchlist().catch(console.error);
+            loadWatchlistFiles().catch(console.error);
+            fetchHealthStatus().catch(console.error);
+            fetchSystemStats().catch(console.error);
+            setInterval(() => fetchSystemStats().catch(console.error), 3000);
+        }
+
+        bootstrap();
     </script>
 </body>
 </html>

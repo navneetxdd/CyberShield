@@ -1,0 +1,124 @@
+/* Append to end of index.css — Prompt C additions */
+/* ================================================ */
+
+/* Sharp corners enforcement (Prompt C §10.1) */
+*, *::before, *::after {
+  border-radius: 0 !important;
+}
+.rounded-full, [class*="rounded-full"] {
+  border-radius: 9999px !important;
+}
+
+/* Shimmer skeleton (§10.5) */
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--border) / 0.3) 25%,
+    hsl(var(--border) / 0.6) 50%,
+    hsl(var(--border) / 0.3) 75%
+  );
+  background-size: 200% auto;
+  animation: shimmer 1.5s linear infinite;
+}
+
+/* Count-up animation for metric values (§11) */
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-count-up { animation: count-up 0.2s ease-out forwards; }
+
+/* Feed connect animation for camera cells (§11) */
+@keyframes feed-connect {
+  0%   { opacity: 0; transform: scale(0.95); }
+  60%  { opacity: 1; transform: scale(1.02); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.animate-feed-connect { animation: feed-connect 0.4s ease-out; }
+
+/* Sidebar label expand (§11) */
+@keyframes sidebar-expand {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.animate-sidebar-expand { animation: sidebar-expand 0.15s ease-out forwards; }
+
+/* Density pulse for crowd overlay */
+@keyframes densityPulse {
+  0%   { opacity: 0.08; }
+  100% { opacity: 0.16; }
+}
+
+/* Global button base overrides (§10.2) */
+.btn-primary {
+  background: hsl(var(--primary) / 0.15);
+  border: 1px solid hsl(var(--primary) / 0.5);
+  color: hsl(var(--primary));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  height: 28px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.btn-primary:hover {
+  background: hsl(var(--primary) / 0.25);
+  border-color: hsl(var(--primary) / 0.8);
+}
+.btn-primary:active { transform: scale(0.97); }
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid hsl(var(--border));
+  color: hsl(var(--muted-foreground));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  height: 28px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.btn-secondary:hover {
+  background: hsl(var(--border) / 0.5);
+  color: hsl(var(--foreground));
+}
+
+.btn-destructive {
+  background: hsl(var(--destructive) / 0.1);
+  border: 1px solid hsl(var(--destructive) / 0.5);
+  color: hsl(var(--destructive));
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  height: 28px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.btn-destructive:hover {
+  background: hsl(var(--destructive) / 0.2);
+}
+
+/* Global input overrides (§10.3) */
+input, select, textarea {
+  background: hsl(var(--background)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 11px !important;
+  padding: 6px 10px !important;
+  outline: none !important;
+}
+input:focus, select:focus, textarea:focus {
+  outline: 1px solid hsl(var(--primary)) !important;
+  outline-offset: 0 !important;
+}

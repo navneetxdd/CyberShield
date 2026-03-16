@@ -13,11 +13,12 @@ import io
 from typing import Dict, List
 
 import matplotlib
+import psutil
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from matplotlib import pyplot as plt
@@ -40,6 +41,9 @@ matplotlib.use("Agg")
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 WATCHLIST_DIR = BASE_DIR / "watchlist"
+FRONTEND_DIST_DIR = BASE_DIR / "static_ui"
+FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+LEGACY_INDEX_PATH = BASE_DIR / "templates" / "index.html"
 
 runtimes: Dict[str, CameraRuntime] = {}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".m4v", ".webm", ".ts"}
@@ -53,6 +57,35 @@ STARTUP_STATE = {
     "error": None,
     "last_updated": None,
 }
+RUNTIME_SETTINGS = {
+    "face_threshold": 1.05,
+}
+
+
+def load_local_env(env_path: Path) -> None:
+    if not env_path.exists() or not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+load_local_env(BASE_DIR / ".env")
+
+try:
+    import pynvml  # type: ignore[import-untyped]
+
+    _NVML_AVAILABLE = True
+except Exception:
+    pynvml = None
+    _NVML_AVAILABLE = False
 
 
 def env_flag(name: str, default: bool) -> bool:
@@ -114,6 +147,8 @@ def resolve_cors_settings() -> tuple[List[str], bool]:
         [
             "http://127.0.0.1:8080",
             "http://localhost:8080",
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
             "http://127.0.0.1:3000",
             "http://localhost:3000",
         ],
@@ -406,9 +441,51 @@ def get_health_snapshot() -> dict:
     return base
 
 
+def get_system_stats_snapshot() -> dict:
+    virtual_memory = psutil.virtual_memory()
+    payload = {
+        "cpu_percent": float(psutil.cpu_percent(interval=None)),
+        "memory_percent": float(virtual_memory.percent),
+        "memory_used_mb": round(float(virtual_memory.used) / (1024 * 1024), 2),
+        "memory_total_mb": round(float(virtual_memory.total) / (1024 * 1024), 2),
+        "gpu_available": False,
+        "gpu_name": None,
+        "gpu_percent": 0.0,
+        "gpu_memory_used_mb": 0.0,
+        "gpu_memory_total_mb": 0.0,
+    }
+
+    if not _NVML_AVAILABLE or pynvml is None:
+        return payload
+
+    try:
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        payload.update(
+            {
+                "gpu_available": True,
+                "gpu_name": pynvml.nvmlDeviceGetName(handle).decode("utf-8", errors="ignore"),
+                "gpu_percent": float(util.gpu),
+                "gpu_memory_used_mb": round(float(memory.used) / (1024 * 1024), 2),
+                "gpu_memory_total_mb": round(float(memory.total) / (1024 * 1024), 2),
+            }
+        )
+    except Exception:
+        return payload
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+    return payload
+
+
 app = FastAPI(title="CyberShield AI Video Analytics", lifespan=lifespan)
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.include_router(osint_router)
+app.mount("/assets", StaticFiles(directory=str(FRONTEND_ASSETS_DIR), check_dir=False), name="frontend-assets")
 
 app.add_middleware(
     CORSMiddleware,
@@ -437,8 +514,16 @@ async def enforce_upload_limits(request: Request, call_next):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_dashboard(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def read_dashboard():
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    if LEGACY_INDEX_PATH.exists():
+        return FileResponse(LEGACY_INDEX_PATH)
+    return HTMLResponse(
+        "Frontend bundle is not available. Build the React app from integrated-video-analytics/frontend.",
+        status_code=503,
+    )
 
 
 @app.get("/api/cameras")
@@ -540,6 +625,11 @@ def health_check():
     return get_health_snapshot()
 
 
+@app.get("/api/system/stats")
+def system_stats():
+    return get_system_stats_snapshot()
+
+
 @app.get("/api/logs/history")
 def get_logs_history(limit: int = 50, query: str | None = None, camera_id: str | None = None):
     return {"logs": get_recent_events(limit=limit, query=query, camera_id=camera_id)}
@@ -616,6 +706,80 @@ def get_traffic(camera_id: str | None = None):
 @app.get("/api/analytics/ocr")
 def get_ocr_summary(camera_id: str | None = None):
     return get_ocr_analytics(camera_id=camera_id)
+
+
+@app.get("/api/analytics/summary")
+def get_analytics_summary(camera_id: str | None = None):
+    vehicle_records = get_vehicle_records(limit=500, camera_id=camera_id, require_plate=False)
+    face_records = get_face_records(limit=500, camera_id=camera_id)
+    plate_records = get_plate_reads(limit=500, camera_id=camera_id)
+    events = get_recent_events(limit=1000, camera_id=camera_id)
+
+    gender_breakdown: Dict[str, int] = {"Male": 0, "Female": 0, "Unknown": 0}
+    for face in face_records:
+        gender = str(face.get("gender") or "Unknown").strip().capitalize()
+        if gender not in gender_breakdown:
+            gender_breakdown[gender] = 0
+        gender_breakdown[gender] += 1
+
+    vehicle_type_breakdown: Dict[str, int] = {}
+    for vehicle in vehicle_records:
+        vehicle_type = str(vehicle.get("vehicle_type") or "Unknown").strip().upper()
+        vehicle_type_breakdown[vehicle_type] = vehicle_type_breakdown.get(vehicle_type, 0) + 1
+
+    plate_frequency: Dict[str, int] = {}
+    for plate in plate_records:
+        plate_text = str(plate.get("plate_text") or "").strip().upper()
+        if plate_text:
+            plate_frequency[plate_text] = plate_frequency.get(plate_text, 0) + 1
+
+    event_count_by_type: Dict[str, int] = {}
+    for event in events:
+        event_type = str(event.get("type") or "event")
+        event_count_by_type[event_type] = event_count_by_type.get(event_type, 0) + 1
+
+    top_plates = [
+        {"plate_text": plate_text, "count": count}
+        for plate_text, count in sorted(plate_frequency.items(), key=lambda item: item[1], reverse=True)[:5]
+    ]
+
+    return {
+        "summary": {
+            "camera_id": camera_id or "all",
+            "total_vehicles": len(vehicle_records),
+            "total_people": len(face_records),
+            "total_plates": len(plate_records),
+            "total_faces": len(face_records),
+            "watchlist_hits": sum(1 for face in face_records if bool(face.get("watchlist_hit"))),
+            "gender_breakdown": gender_breakdown,
+            "vehicle_type_breakdown": vehicle_type_breakdown,
+            "top_plates": top_plates,
+            "event_count_by_type": event_count_by_type,
+        }
+    }
+
+
+@app.get("/api/settings/face-threshold")
+def get_face_threshold_setting():
+    return {"value": float(RUNTIME_SETTINGS["face_threshold"])}
+
+
+@app.post("/api/settings/face-threshold")
+async def set_face_threshold_setting(request: Request):
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body is required")
+    value = payload.get("value")
+    if value is None:
+        raise HTTPException(status_code=400, detail="value is required")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="value must be a number") from exc
+    if parsed <= 0:
+        raise HTTPException(status_code=400, detail="value must be positive")
+    RUNTIME_SETTINGS["face_threshold"] = parsed
+    return {"status": "success", "value": parsed}
 
 
 @app.get("/api/export/maltego")
@@ -893,6 +1057,28 @@ async def download_report(camera_id: str):
         headers={
             "Content-Disposition": f'attachment; filename="CyberShield_{camera_id}_Analytics_Report.pdf"'
         },
+    )
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_spa(full_path: str):
+    blocked_prefixes = ("api/", "ws/", "docs", "redoc", "openapi.json")
+    if full_path.startswith(blocked_prefixes):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    requested_path = FRONTEND_DIST_DIR / full_path
+    if requested_path.exists() and requested_path.is_file():
+        return FileResponse(requested_path)
+
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    if LEGACY_INDEX_PATH.exists():
+        return FileResponse(LEGACY_INDEX_PATH)
+
+    return HTMLResponse(
+        "Frontend bundle is not available. Build the React app from integrated-video-analytics/frontend.",
+        status_code=503,
     )
 
 
