@@ -1,0 +1,27 @@
+<section id="watchlistEditor">
+  <h3>Watchlist Enrollment</h3>
+  <input type="text" id="watchName" placeholder="Display name" />
+  <input type="file" id="watchFile" accept="image/*" />
+  <button id="watchSubmit">Enroll</button>
+  <pre id="watchResult"></pre>
+</section>
+<script>
+(function () {
+  const submit = document.getElementById("watchSubmit");
+  const output = document.getElementById("watchResult");
+  submit.addEventListener("click", async () => {
+    const name = document.getElementById("watchName").value;
+    const file = document.getElementById("watchFile").files[0];
+    const form = new FormData();
+    form.append("name", name);
+    form.append("file", file);
+    const token = localStorage.getItem("adminApiToken") || "";
+    const res = await fetch("/api/watchlist", {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    output.textContent = await res.text();
+  });
+})();
+</script>

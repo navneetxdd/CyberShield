@@ -24,4 +24,8 @@ scipy>=1.4.1
 tqdm>=4.64.0
 psutil
 ultralytics>=8.4.0
+sahi>=0.11.20
+google-generativeai>=0.8.5
+timm>=1.0.9
+torchreid>=0.2.5
 pytest>=8.0.0

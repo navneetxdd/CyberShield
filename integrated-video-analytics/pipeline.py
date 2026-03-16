@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
+import json
 import os
 import re
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -39,6 +41,20 @@ import requests
 import supervision as sv
 import torch
 from ultralytics import YOLO
+try:
+    from sahi import AutoDetectionModel  # type: ignore[import-not-found]
+    from sahi.predict import get_sliced_prediction  # type: ignore[import-not-found]
+    HAS_SAHI = True
+except ImportError:
+    AutoDetectionModel = None
+    get_sliced_prediction = None
+    HAS_SAHI = False
+try:
+    import google.generativeai as genai  # type: ignore[import-not-found]
+    HAS_GEMINI = True
+except ImportError:
+    genai = None
+    HAS_GEMINI = False
 
 from database import (
     log_event,
@@ -223,6 +239,39 @@ CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE"
 ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
 ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
 FACE_MATCH_THRESHOLD = read_env_float("CYBERSHIELD_FACE_MATCH_THRESHOLD", 0.95, minimum=0.5, maximum=1.3)
+ENABLE_GEMINI_ENRICHMENT = read_env_bool("CYBERSHIELD_ENABLE_GEMINI_ENRICHMENT", False)
+GEMINI_MODEL_NAME = (os.getenv("CYBERSHIELD_GEMINI_MODEL") or "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+ENABLE_ADVANCED_ON_GPU = read_env_bool("CYBERSHIELD_ENABLE_ADVANCED_ON_GPU", True)
+DEFAULT_ADVANCED_DETECTORS = torch.cuda.is_available() and ENABLE_ADVANCED_ON_GPU
+ENABLE_HEAVY_VALIDATOR = read_env_bool("CYBERSHIELD_ENABLE_HEAVY_VALIDATOR", DEFAULT_ADVANCED_DETECTORS)
+HEAVY_VALIDATOR_MODEL = (os.getenv("CYBERSHIELD_HEAVY_VALIDATOR_MODEL") or "yolov8x.pt").strip() or "yolov8x.pt"
+HEAVY_VALIDATOR_MIN_CONF = read_env_float("CYBERSHIELD_HEAVY_VALIDATOR_MIN_CONF", 0.15, minimum=0.05, maximum=0.9)
+HEAVY_VALIDATOR_MAX_CONF = read_env_float("CYBERSHIELD_HEAVY_VALIDATOR_MAX_CONF", 0.45, minimum=0.06, maximum=0.95)
+HEAVY_VALIDATOR_IOU = read_env_float("CYBERSHIELD_HEAVY_VALIDATOR_IOU", 0.45, minimum=0.1, maximum=0.95)
+HEAVY_VALIDATOR_INTERVAL = read_env_int("CYBERSHIELD_HEAVY_VALIDATOR_INTERVAL", 2, minimum=1, maximum=12)
+ENABLE_SAHI_INFERENCE = read_env_bool("CYBERSHIELD_ENABLE_SAHI_INFERENCE", DEFAULT_ADVANCED_DETECTORS)
+SAHI_SLICE_HEIGHT = read_env_int("CYBERSHIELD_SAHI_SLICE_HEIGHT", 512, minimum=256, maximum=1024)
+SAHI_SLICE_WIDTH = read_env_int("CYBERSHIELD_SAHI_SLICE_WIDTH", 512, minimum=256, maximum=1024)
+SAHI_OVERLAP_HEIGHT = read_env_float("CYBERSHIELD_SAHI_OVERLAP_HEIGHT", 0.2, minimum=0.05, maximum=0.6)
+SAHI_OVERLAP_WIDTH = read_env_float("CYBERSHIELD_SAHI_OVERLAP_WIDTH", 0.2, minimum=0.05, maximum=0.6)
+SAHI_TRIGGER_MIN_WIDTH = read_env_int("CYBERSHIELD_SAHI_TRIGGER_MIN_WIDTH", 1600, minimum=640, maximum=4096)
+SAHI_INTERVAL = read_env_int("CYBERSHIELD_SAHI_INTERVAL", 4, minimum=1, maximum=20)
+ENABLE_RTDETR_CONFIRMATION = read_env_bool("CYBERSHIELD_ENABLE_RTDETR_CONFIRMATION", DEFAULT_ADVANCED_DETECTORS)
+RTDETR_MODEL_NAME = (os.getenv("CYBERSHIELD_RTDETR_MODEL") or "rtdetr-l.pt").strip() or "rtdetr-l.pt"
+RTDETR_MIN_CONF = read_env_float("CYBERSHIELD_RTDETR_MIN_CONF", 0.15, minimum=0.05, maximum=0.9)
+RTDETR_IOU = read_env_float("CYBERSHIELD_RTDETR_IOU", 0.45, minimum=0.1, maximum=0.95)
+RTDETR_INTERVAL = read_env_int("CYBERSHIELD_RTDETR_INTERVAL", 3, minimum=1, maximum=20)
+ENABLE_OSINT_REID = read_env_bool("CYBERSHIELD_ENABLE_OSINT_REID", True)
+ENABLE_ADAPTIVE_GOVERNOR = read_env_bool("CYBERSHIELD_ENABLE_ADAPTIVE_GOVERNOR", True)
+ADAPTIVE_TARGET_FPS = read_env_float("CYBERSHIELD_ADAPTIVE_TARGET_FPS", 18.0, minimum=8.0, maximum=60.0)
+ADAPTIVE_MAX_INFER_MS = read_env_float(
+    "CYBERSHIELD_ADAPTIVE_MAX_INFER_MS",
+    85.0 if torch.cuda.is_available() else 145.0,
+    minimum=15.0,
+    maximum=400.0,
+)
+ADAPTIVE_HYSTERESIS_FRAMES = read_env_int("CYBERSHIELD_ADAPTIVE_HYSTERESIS_FRAMES", 5, minimum=1, maximum=120)
 
 PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "").strip()
 
@@ -244,6 +293,8 @@ class SharedResources:
     _face_analyzer = None
     _ocr_reader = None
     _paddle_ocr_reader = None
+    _heavy_validator: Optional[YOLO] = None
+    _rtdetr_validator: Optional[YOLO] = None
     _initialization_errors: Dict[str, str] = {}
 
     detector_lock = threading.Lock()
@@ -306,6 +357,38 @@ class SharedResources:
                     cls._set_initialization_error("plate_detector", exc)
                     cls._plate_detector = None
             return cls._plate_detector
+
+    @classmethod
+    def get_heavy_validator(cls) -> Optional[YOLO]:
+        if not ENABLE_HEAVY_VALIDATOR:
+            return None
+        with cls.init_lock:
+            if cls._heavy_validator is None:
+                try:
+                    print(f"Loading heavy validator: {HEAVY_VALIDATOR_MODEL}")
+                    cls._heavy_validator = YOLO(HEAVY_VALIDATOR_MODEL)
+                    cls._clear_initialization_error("heavy_validator")
+                except Exception as exc:
+                    print(f"Heavy validator unavailable: {exc}")
+                    cls._set_initialization_error("heavy_validator", exc)
+                    cls._heavy_validator = None
+            return cls._heavy_validator
+
+    @classmethod
+    def get_rtdetr_validator(cls) -> Optional[YOLO]:
+        if not ENABLE_RTDETR_CONFIRMATION:
+            return None
+        with cls.init_lock:
+            if cls._rtdetr_validator is None:
+                try:
+                    print(f"Loading RT-DETR validator: {RTDETR_MODEL_NAME}")
+                    cls._rtdetr_validator = YOLO(RTDETR_MODEL_NAME)
+                    cls._clear_initialization_error("rtdetr_validator")
+                except Exception as exc:
+                    print(f"RT-DETR validator unavailable: {exc}")
+                    cls._set_initialization_error("rtdetr_validator", exc)
+                    cls._rtdetr_validator = None
+            return cls._rtdetr_validator
 
     @classmethod
     def get_face_analyzer(cls):
@@ -519,6 +602,50 @@ class VideoPipeline:
         self._cached_watchlist_signature: tuple[tuple[str, int, int], ...] = ()
         self._plate_api_disabled_until = 0.0
         self.face_match_threshold = FACE_MATCH_THRESHOLD
+        self._gemini_model = None
+        self._gemini_failures = 0
+        self._heavy_validator_failures = 0
+        self._rtdetr_failures = 0
+        self._sahi_failures = 0
+        self._frame_counter = 0
+        self._sahi_model = None
+        self.gemini_enabled = bool(ENABLE_GEMINI_ENRICHMENT and HAS_GEMINI and GEMINI_API_KEY)
+        self.heavy_validator = SharedResources.get_heavy_validator() if ENABLE_HEAVY_VALIDATOR else None
+        self.rtdetr_validator = SharedResources.get_rtdetr_validator() if ENABLE_RTDETR_CONFIRMATION else None
+        self.sahi_enabled = bool(ENABLE_SAHI_INFERENCE and HAS_SAHI)
+        self._base_heavy_enabled = self.heavy_validator is not None
+        self._base_rtdetr_enabled = self.rtdetr_validator is not None
+        self._base_sahi_enabled = self.sahi_enabled
+        self.adaptive_governor_enabled = bool(ENABLE_ADAPTIVE_GOVERNOR)
+        self._adaptive_mode = "normal"
+        self._adaptive_pending_mode = "normal"
+        self._adaptive_pending_frames = 0
+        self._adaptive_target_fps = ADAPTIVE_TARGET_FPS if self.device != "cpu" else max(10.0, ADAPTIVE_TARGET_FPS - 4.0)
+        self._adaptive_max_infer_ms = ADAPTIVE_MAX_INFER_MS
+        self._adaptive_infer_ema_ms = ADAPTIVE_MAX_INFER_MS * 0.7
+        self._last_detection_latency_ms = 0.0
+        self._effective_sahi_enabled = self._base_sahi_enabled
+        self._effective_heavy_enabled = self._base_heavy_enabled
+        self._effective_rtdetr_enabled = self._base_rtdetr_enabled
+        self._effective_sahi_interval = max(1, SAHI_INTERVAL)
+        self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
+        self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+        self.osint_service = None
+        if ENABLE_OSINT_REID:
+            try:
+                from osint_reid.service import get_osint_service
+
+                self.osint_service = get_osint_service()
+            except Exception as exc:
+                print(f"OSINT/ReID service unavailable: {exc}")
+                self.osint_service = None
+
+        if ENABLE_GEMINI_ENRICHMENT and not HAS_GEMINI:
+            print("Gemini enrichment enabled but google-generativeai is not installed.")
+        if ENABLE_GEMINI_ENRICHMENT and not GEMINI_API_KEY:
+            print("Gemini enrichment enabled but GEMINI_API_KEY is missing.")
+        if ENABLE_SAHI_INFERENCE and not HAS_SAHI:
+            print("SAHI inference enabled but sahi is not installed.")
 
     @staticmethod
     def gpu_available() -> bool:
@@ -661,9 +788,178 @@ class VideoPipeline:
             "type": event_type,
             "detail": detail,
         }
+        event = self.enrich_with_gemini(event, "event")
+        enriched_detail = detail
+        gemini_block = event.get("gemini")
+        if isinstance(gemini_block, dict) and gemini_block.get("summary"):
+            enriched_detail = f"{detail} | AI: {str(gemini_block.get('summary'))[:180]}"
+            event["detail"] = enriched_detail
         state["event_logs"].insert(0, event)
         del state["event_logs"][50:]
-        self._submit_db_task(log_event, self.camera_id, event_type, detail)
+        self._submit_db_task(log_event, self.camera_id, event_type, enriched_detail)
+
+    @staticmethod
+    def _empty_detections() -> sv.Detections:
+        return sv.Detections(
+            xyxy=np.empty((0, 4), dtype=np.float32),
+            confidence=np.empty((0,), dtype=np.float32),
+            class_id=np.empty((0,), dtype=np.int64),
+        )
+
+    def _predict_primary(self, frame: np.ndarray) -> sv.Detections:
+        with SharedResources.detector_lock:
+            with torch.inference_mode():
+                results = self.detector.predict(
+                    source=frame,
+                    conf=DETECTION_CONFIDENCE,
+                    imgsz=DETECTION_IMAGE_SIZE,
+                    classes=list(TARGET_CLASSES.keys()),
+                    device=self.device,
+                    half=(str(self.device) != "cpu"),
+                    verbose=False,
+                )
+        return sv.Detections.from_ultralytics(results[0])
+
+    def _should_use_sahi(self, frame: np.ndarray) -> bool:
+        if not self._effective_sahi_enabled:
+            return False
+        if self._frame_counter % self._effective_sahi_interval != 0:
+            return False
+        frame_height, frame_width = frame.shape[:2]
+        return frame_width >= SAHI_TRIGGER_MIN_WIDTH and frame_height >= 360
+
+    def _determine_adaptive_mode(self, analytics_fps: float) -> str:
+        fps = max(float(analytics_fps or 0.0), 0.0)
+        infer_ms = max(float(self._adaptive_infer_ema_ms or 0.0), 0.0)
+        pressure_fps = self._adaptive_target_fps * 0.88
+        caution_fps = self._adaptive_target_fps * 0.98
+
+        if fps > 0.0:
+            if fps < pressure_fps or infer_ms > (self._adaptive_max_infer_ms * 1.15):
+                return "pressure"
+            if fps < caution_fps or infer_ms > (self._adaptive_max_infer_ms * 0.92):
+                return "caution"
+            return "normal"
+
+        if infer_ms > (self._adaptive_max_infer_ms * 1.15):
+            return "pressure"
+        if infer_ms > (self._adaptive_max_infer_ms * 0.92):
+            return "caution"
+        return "normal"
+
+    def _apply_adaptive_policy(self) -> None:
+        if not self.adaptive_governor_enabled:
+            self._effective_sahi_enabled = self._base_sahi_enabled
+            self._effective_heavy_enabled = self._base_heavy_enabled
+            self._effective_rtdetr_enabled = self._base_rtdetr_enabled
+            self._effective_sahi_interval = max(1, SAHI_INTERVAL)
+            self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
+            self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+            return
+
+        mode = self._adaptive_mode
+        if mode == "pressure":
+            self._effective_sahi_enabled = False
+            self._effective_heavy_enabled = self._base_heavy_enabled
+            self._effective_rtdetr_enabled = False
+            self._effective_sahi_interval = max(8, SAHI_INTERVAL * 4)
+            self._effective_heavy_interval = max(6, HEAVY_VALIDATOR_INTERVAL * 3)
+            self._effective_rtdetr_interval = max(8, RTDETR_INTERVAL * 4)
+            return
+
+        if mode == "caution":
+            self._effective_sahi_enabled = self._base_sahi_enabled
+            self._effective_heavy_enabled = self._base_heavy_enabled
+            self._effective_rtdetr_enabled = self._base_rtdetr_enabled and self.device != "cpu"
+            self._effective_sahi_interval = max(SAHI_INTERVAL + 1, SAHI_INTERVAL * 2)
+            self._effective_heavy_interval = max(HEAVY_VALIDATOR_INTERVAL + 1, HEAVY_VALIDATOR_INTERVAL * 2)
+            self._effective_rtdetr_interval = max(RTDETR_INTERVAL + 2, RTDETR_INTERVAL * 2)
+            return
+
+        self._effective_sahi_enabled = self._base_sahi_enabled
+        self._effective_heavy_enabled = self._base_heavy_enabled
+        self._effective_rtdetr_enabled = self._base_rtdetr_enabled
+        self._effective_sahi_interval = max(1, SAHI_INTERVAL)
+        self._effective_heavy_interval = max(1, HEAVY_VALIDATOR_INTERVAL)
+        self._effective_rtdetr_interval = max(1, RTDETR_INTERVAL)
+
+    def _update_adaptive_governor(self, state: Dict[str, Any]) -> None:
+        if not self.adaptive_governor_enabled:
+            self._adaptive_mode = "disabled"
+            self._adaptive_pending_mode = "disabled"
+            self._adaptive_pending_frames = 0
+            self._apply_adaptive_policy()
+            return
+
+        desired_mode = self._determine_adaptive_mode(float(state.get("analytics_fps") or 0.0))
+        if desired_mode == self._adaptive_mode:
+            self._adaptive_pending_mode = desired_mode
+            self._adaptive_pending_frames = 0
+            self._apply_adaptive_policy()
+            return
+
+        if desired_mode != self._adaptive_pending_mode:
+            self._adaptive_pending_mode = desired_mode
+            self._adaptive_pending_frames = 1
+        else:
+            self._adaptive_pending_frames += 1
+
+        if self._adaptive_pending_frames >= ADAPTIVE_HYSTERESIS_FRAMES:
+            self._adaptive_mode = desired_mode
+            self._adaptive_pending_frames = 0
+        self._apply_adaptive_policy()
+
+    def _predict_with_sahi(self, frame: np.ndarray) -> sv.Detections:
+        if not self.sahi_enabled or AutoDetectionModel is None or get_sliced_prediction is None:
+            return self._predict_primary(frame)
+        try:
+            if self._sahi_model is None:
+                self._sahi_model = AutoDetectionModel.from_pretrained(
+                    model_type="ultralytics",
+                    model_path=DETECTION_MODEL_NAME,
+                    confidence_threshold=DETECTION_CONFIDENCE,
+                    device=self.device,
+                )
+
+            prediction = get_sliced_prediction(
+                image=frame,
+                detection_model=self._sahi_model,
+                slice_height=SAHI_SLICE_HEIGHT,
+                slice_width=SAHI_SLICE_WIDTH,
+                overlap_height_ratio=SAHI_OVERLAP_HEIGHT,
+                overlap_width_ratio=SAHI_OVERLAP_WIDTH,
+            )
+
+            object_predictions = prediction.object_prediction_list or []
+            if not object_predictions:
+                return self._empty_detections()
+
+            boxes = []
+            scores = []
+            classes = []
+            for obj in object_predictions:
+                class_id = int(getattr(obj.category, "id", -1))
+                if class_id not in TARGET_CLASSES:
+                    continue
+                box = obj.bbox
+                boxes.append([float(box.minx), float(box.miny), float(box.maxx), float(box.maxy)])
+                scores.append(float(obj.score.value))
+                classes.append(class_id)
+
+            if not boxes:
+                return self._empty_detections()
+
+            return sv.Detections(
+                xyxy=np.asarray(boxes, dtype=np.float32),
+                confidence=np.asarray(scores, dtype=np.float32),
+                class_id=np.asarray(classes, dtype=np.int64),
+            )
+        except Exception as exc:
+            self._sahi_failures += 1
+            print(f"SAHI inference failed: {exc}")
+            if self._sahi_failures >= 6:
+                self.sahi_enabled = False
+            return self._predict_primary(frame)
 
     @staticmethod
     def _expand_box(
@@ -997,6 +1293,196 @@ class VideoPipeline:
 
         return self._extract_plate_cloud(vehicle_crop)
 
+    @staticmethod
+    def _strip_json_fence(raw_text: str) -> str:
+        text = (raw_text or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```[a-zA-Z]*\\s*", "", text)
+            text = re.sub(r"\\s*```$", "", text)
+        return text.strip()
+
+    @staticmethod
+    def _box_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
+        left = max(float(box_a[0]), float(box_b[0]))
+        top = max(float(box_a[1]), float(box_b[1]))
+        right = min(float(box_a[2]), float(box_b[2]))
+        bottom = min(float(box_a[3]), float(box_b[3]))
+        if right <= left or bottom <= top:
+            return 0.0
+        inter = (right - left) * (bottom - top)
+        area_a = max((float(box_a[2]) - float(box_a[0])) * (float(box_a[3]) - float(box_a[1])), 0.0)
+        area_b = max((float(box_b[2]) - float(box_b[0])) * (float(box_b[3]) - float(box_b[1])), 0.0)
+        denom = area_a + area_b - inter
+        return (inter / denom) if denom > 0 else 0.0
+
+    def _init_gemini_model(self):
+        if not self.gemini_enabled or genai is None:
+            return None
+        if self._gemini_model is not None:
+            return self._gemini_model
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            self._gemini_model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+        except Exception as exc:
+            self._gemini_failures += 1
+            print(f"Gemini model initialization failed: {exc}")
+            if self._gemini_failures >= 3:
+                self.gemini_enabled = False
+            return None
+        return self._gemini_model
+
+    def enrich_with_gemini(self, record: dict, entity_type: str) -> dict:
+        if not self.gemini_enabled:
+            return record
+        model = self._init_gemini_model()
+        if model is None:
+            return record
+
+        payload = dict(record)
+        prompt = (
+            "You are a security analytics assistant. "
+            "Return JSON only with keys: summary, risk_level, tags. "
+            "risk_level must be one of low, medium, high. "
+            f"Entity type: {entity_type}. Input record: {json.dumps(payload, ensure_ascii=True)}"
+        )
+        try:
+            response = model.generate_content(prompt)
+            text = self._strip_json_fence(getattr(response, "text", ""))
+            if not text:
+                return record
+            parsed = json.loads(text)
+            summary = str(parsed.get("summary") or "").strip()
+            risk_level = str(parsed.get("risk_level") or "medium").strip().lower()
+            if risk_level not in {"low", "medium", "high"}:
+                risk_level = "medium"
+            tags = parsed.get("tags") or []
+            if not isinstance(tags, list):
+                tags = [str(tags)]
+            record["gemini"] = {
+                "summary": summary,
+                "risk_level": risk_level,
+                "tags": [str(tag) for tag in tags[:8]],
+                "model": GEMINI_MODEL_NAME,
+            }
+        except Exception as exc:
+            self._gemini_failures += 1
+            print(f"Gemini enrichment failed: {exc}")
+            if self._gemini_failures >= 5:
+                self.gemini_enabled = False
+        return record
+
+    def _apply_heavy_validator(self, frame: np.ndarray, detections: sv.Detections) -> sv.Detections:
+        if self.heavy_validator is None:
+            return detections
+        if detections.confidence is None or detections.class_id is None or len(detections) == 0:
+            return detections
+        if HEAVY_VALIDATOR_MAX_CONF <= HEAVY_VALIDATOR_MIN_CONF:
+            return detections
+
+        confidences = np.asarray(detections.confidence)
+        low_band = np.where((confidences >= HEAVY_VALIDATOR_MIN_CONF) & (confidences <= HEAVY_VALIDATOR_MAX_CONF))[0]
+        if low_band.size == 0:
+            return detections
+
+        try:
+            with SharedResources.detector_lock:
+                with torch.inference_mode():
+                    results = self.heavy_validator.predict(
+                        source=frame,
+                        conf=HEAVY_VALIDATOR_MIN_CONF,
+                        imgsz=DETECTION_IMAGE_SIZE,
+                        classes=list(TARGET_CLASSES.keys()),
+                        device=self.device,
+                        half=(str(self.device) != "cpu"),
+                        verbose=False,
+                    )
+            validator_detections = sv.Detections.from_ultralytics(results[0])
+            if len(validator_detections) == 0 or validator_detections.class_id is None:
+                return detections
+
+            keep_indices = [index for index in range(len(detections)) if index not in set(low_band.tolist())]
+            validator_boxes = np.asarray(validator_detections.xyxy)
+            validator_classes = np.asarray(validator_detections.class_id)
+
+            for index in low_band.tolist():
+                candidate_box = np.asarray(detections.xyxy[index])
+                candidate_class = int(detections.class_id[index])
+                class_matches = np.where(validator_classes == candidate_class)[0]
+                best_iou = 0.0
+                for match_idx in class_matches.tolist():
+                    best_iou = max(best_iou, self._box_iou(candidate_box, validator_boxes[match_idx]))
+                if best_iou >= HEAVY_VALIDATOR_IOU:
+                    keep_indices.append(index)
+
+            if len(keep_indices) == len(detections):
+                return detections
+            if not keep_indices:
+                return detections
+            keep_indices = sorted(set(keep_indices))
+            filtered = detections[np.array(keep_indices)]
+            if isinstance(filtered, sv.Detections):
+                return filtered
+            return detections
+        except Exception as exc:
+            self._heavy_validator_failures += 1
+            print(f"Heavy validator failed: {exc}")
+            if self._heavy_validator_failures >= 6:
+                self.heavy_validator = None
+            return detections
+
+    def _apply_rtdetr_confirmation(self, frame: np.ndarray, detections: sv.Detections) -> sv.Detections:
+        if self.rtdetr_validator is None:
+            return detections
+        if detections.confidence is None or detections.class_id is None or len(detections) == 0:
+            return detections
+        if self._frame_counter % RTDETR_INTERVAL != 0:
+            return detections
+
+        try:
+            with SharedResources.detector_lock:
+                with torch.inference_mode():
+                    results = self.rtdetr_validator.predict(
+                        source=frame,
+                        conf=RTDETR_MIN_CONF,
+                        imgsz=DETECTION_IMAGE_SIZE,
+                        classes=list(TARGET_CLASSES.keys()),
+                        device=self.device,
+                        half=(str(self.device) != "cpu"),
+                        verbose=False,
+                    )
+            rtdetr_detections = sv.Detections.from_ultralytics(results[0])
+            if len(rtdetr_detections) == 0 or rtdetr_detections.class_id is None:
+                return detections
+
+            keep_indices: list[int] = []
+            rtdetr_boxes = np.asarray(rtdetr_detections.xyxy)
+            rtdetr_classes = np.asarray(rtdetr_detections.class_id)
+            for index in range(len(detections)):
+                class_id = int(detections.class_id[index])
+                box = np.asarray(detections.xyxy[index])
+                class_matches = np.where(rtdetr_classes == class_id)[0]
+                best_iou = 0.0
+                for match_idx in class_matches.tolist():
+                    best_iou = max(best_iou, self._box_iou(box, rtdetr_boxes[match_idx]))
+                if best_iou >= RTDETR_IOU or float(detections.confidence[index]) >= max(HEAVY_VALIDATOR_MAX_CONF, 0.5):
+                    keep_indices.append(index)
+
+            if not keep_indices:
+                return detections
+            if len(keep_indices) == len(detections):
+                return detections
+
+            filtered = detections[np.asarray(sorted(set(keep_indices)), dtype=np.int64)]
+            if isinstance(filtered, sv.Detections):
+                return filtered
+            return detections
+        except Exception as exc:
+            self._rtdetr_failures += 1
+            print(f"RT-DETR confirmation failed: {exc}")
+            if self._rtdetr_failures >= 6:
+                self.rtdetr_validator = None
+            return detections
+
     def get_runtime_status(self) -> Dict[str, Any]:
         cooldown = max(self._plate_api_disabled_until - time.time(), 0.0)
         paddle_ready = self.paddle_ocr_reader is not None
@@ -1020,6 +1506,24 @@ class VideoPipeline:
             "cloud_ocr_ready": cloud_ready,
             "ocr_fallback_ready": bool(paddle_ready or easy_ready or cloud_ready),
             "cloud_ocr_cooldown_seconds": round(cooldown, 1),
+            "gemini_enabled": self.gemini_enabled,
+            "heavy_validator_enabled": self.heavy_validator is not None,
+            "sahi_enabled": self.sahi_enabled,
+            "rtdetr_confirmation_enabled": self.rtdetr_validator is not None,
+            "adaptive_governor_enabled": self.adaptive_governor_enabled,
+            "adaptive_mode": self._adaptive_mode,
+            "adaptive_pending_mode": self._adaptive_pending_mode,
+            "adaptive_pending_frames": self._adaptive_pending_frames,
+            "adaptive_target_fps": round(self._adaptive_target_fps, 2),
+            "adaptive_max_infer_ms": round(self._adaptive_max_infer_ms, 2),
+            "detector_latency_ms": round(self._last_detection_latency_ms, 2),
+            "detector_latency_ema_ms": round(self._adaptive_infer_ema_ms, 2),
+            "effective_sahi_enabled": self._effective_sahi_enabled,
+            "effective_heavy_validator_enabled": self._effective_heavy_enabled,
+            "effective_rtdetr_enabled": self._effective_rtdetr_enabled,
+            "effective_sahi_interval": self._effective_sahi_interval,
+            "effective_heavy_validator_interval": self._effective_heavy_interval,
+            "effective_rtdetr_interval": self._effective_rtdetr_interval,
             "warnings": warnings,
         }
 
@@ -1244,27 +1748,27 @@ class VideoPipeline:
                 self._push_recent(
                     state,
                     "recent_plates",
-                    {
+                    self.enrich_with_gemini({
                         "tracker_id": tracker_id,
                         "plate_text": best_text,
                         "vehicle_type": vehicle_type_enriched,
                         "confidence": round(best_vote["best_confidence"], 3),
                         "ocr_source": mmc_data.get("source", "unknown"),
                         "time": self._format_clock(),
-                    },
+                    }, "plate"),
                     "plate_text",
                 )
                 self._push_recent(
                     state,
                     "recent_vehicles",
-                    {
+                    self.enrich_with_gemini({
                         "tracker_id": tracker_id,
                         "vehicle_type": vehicle_type_enriched,
                         "plate_text": best_text,
                         "confidence": round(best_vote["best_confidence"], 3),
                         "ocr_source": mmc_data.get("source", "unknown"),
                         "time": self._format_clock(),
-                    },
+                    }, "vehicle"),
                     "tracker_id",
                 )
                 detail = (
@@ -1336,6 +1840,7 @@ class VideoPipeline:
                 now = time.time()
                 cached_face = self.face_results.get(tracker_id)
                 previous_gender = cached_face.get("gender") if cached_face else None
+                is_new_face = tracker_id not in self.analyzed_face_track_ids
                 self.face_results[tracker_id] = {
                     "gender": gender,
                     "age": age,
@@ -1344,7 +1849,7 @@ class VideoPipeline:
                     "face_box": (abs_left, abs_top, abs_right, abs_bottom),
                     "expires": now + 8.0,
                 }
-                if tracker_id not in self.analyzed_face_track_ids:
+                if is_new_face:
                     state["faces_detected"] += 1
                     if gender in state["gender_stats"]:
                         state["gender_stats"][gender] += 1
@@ -1360,6 +1865,8 @@ class VideoPipeline:
                     "watchlist_hit": watchlist_hit,
                     "time": self._format_clock(),
                 }
+                if watchlist_hit or is_new_face:
+                    face_record = self.enrich_with_gemini(face_record, "face")
                 self._push_recent(state, "recent_faces", face_record, "tracker_id")
                 if watchlist_hit:
                     detail = f"Watchlist match '{match_name}' on person #{tracker_id}"
@@ -1567,21 +2074,26 @@ class VideoPipeline:
         zone_y = int(frame_height * 0.55)
         now = time.time()
         render_track_ttl = self._render_track_ttl(state)
+        self._frame_counter += 1
+        self._update_adaptive_governor(state)
 
-        with SharedResources.detector_lock:
-            with torch.inference_mode():
-                results = self.detector.predict(
-                    source=frame,
-                    conf=DETECTION_CONFIDENCE,
-                    imgsz=DETECTION_IMAGE_SIZE,
-                    classes=list(TARGET_CLASSES.keys()),
-                    device=self.device,
-                    half=(str(self.device) != "cpu"),
-                    verbose=False,
-                )
-
-        detections = sv.Detections.from_ultralytics(results[0])
+        detection_start = time.perf_counter()
+        detections = self._predict_with_sahi(frame) if self._should_use_sahi(frame) else self._predict_primary(frame)
+        if (
+            self._effective_heavy_enabled
+            and self.heavy_validator is not None
+            and (self._frame_counter % self._effective_heavy_interval == 0)
+        ):
+            detections = self._apply_heavy_validator(frame, detections)
+        if (
+            self._effective_rtdetr_enabled
+            and self.rtdetr_validator is not None
+            and (self._frame_counter % self._effective_rtdetr_interval == 0)
+        ):
+            detections = self._apply_rtdetr_confirmation(frame, detections)
         detections = self.tracker.update_with_detections(detections)
+        self._last_detection_latency_ms = (time.perf_counter() - detection_start) * 1000.0
+        self._adaptive_infer_ema_ms = (self._adaptive_infer_ema_ms * 0.85) + (self._last_detection_latency_ms * 0.15)
 
         current_vehicle_ids: set[int] = set()
         current_people_ids: set[int] = set()
@@ -1626,6 +2138,7 @@ class VideoPipeline:
                 track_state["frames_seen"] += 1
                 center_y = (y1 + y2) // 2
                 is_stable_track = track_state["frames_seen"] >= MIN_STABLE_FRAMES
+                ts_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                 if is_stable_track and center_y >= zone_y:
                     zone_count += 1
 
@@ -1664,6 +2177,20 @@ class VideoPipeline:
                         track_state["person_recorded"] = True
                         state["people_total_count"] += 1
 
+                if is_stable_track and self.osint_service is not None:
+                    try:
+                        self.osint_service.collect_detection(
+                            camera_id=self.camera_id,
+                            tracker_id=tracker_id,
+                            class_name=class_name,
+                            frame=frame,
+                            bbox_xyxy=(x1, y1, x2, y2),
+                            ts_iso=ts_iso,
+                            confidence=confidence,
+                        )
+                    except Exception as exc:
+                        print(f"OSINT collect failed: {exc}")
+
             state["vehicle_count"] = len(current_vehicle_ids)
             state["people_count"] = len(current_people_ids)
             state["vehicle_current_types"] = current_vehicle_types
@@ -1684,6 +2211,17 @@ class VideoPipeline:
             state["detector_model"] = DETECTION_MODEL_NAME
             state["plate_model"] = PLATE_MODEL_NAME
             state["device"] = "cuda" if str(self.device) != "cpu" else "cpu"
+            state["adaptive_governor_enabled"] = status["adaptive_governor_enabled"]
+            state["adaptive_mode"] = status["adaptive_mode"]
+            state["adaptive_target_fps"] = status["adaptive_target_fps"]
+            state["detector_latency_ms"] = status["detector_latency_ms"]
+            state["detector_latency_ema_ms"] = status["detector_latency_ema_ms"]
+            state["effective_sahi_enabled"] = status["effective_sahi_enabled"]
+            state["effective_heavy_validator_enabled"] = status["effective_heavy_validator_enabled"]
+            state["effective_rtdetr_enabled"] = status["effective_rtdetr_enabled"]
+            state["effective_sahi_interval"] = status["effective_sahi_interval"]
+            state["effective_heavy_validator_interval"] = status["effective_heavy_validator_interval"]
+            state["effective_rtdetr_interval"] = status["effective_rtdetr_interval"]
 
             if time.time() - self.last_metric_write >= METRIC_WRITE_INTERVAL_SECONDS:
                 self.last_metric_write = time.time()
@@ -1696,5 +2234,11 @@ class VideoPipeline:
                 )
 
             self._cleanup_expired_cache()
+
+            if self.osint_service is not None:
+                try:
+                    self.osint_service.flush_stale()
+                except Exception as exc:
+                    print(f"OSINT flush failed: {exc}")
 
         return self._draw_scene(frame)

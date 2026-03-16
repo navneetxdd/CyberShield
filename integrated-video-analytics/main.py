@@ -7,6 +7,9 @@ import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+import csv
+import io
+
 from typing import Dict, List
 
 import matplotlib
@@ -30,6 +33,7 @@ from database import (
 )
 from pipeline import get_system_health_snapshot, has_any_ocr_path, warm_shared_resources
 from runtime import CameraRuntime
+from osint_reid.api import router as osint_router
 
 matplotlib.use("Agg")
 
@@ -404,6 +408,7 @@ def get_health_snapshot() -> dict:
 
 app = FastAPI(title="CyberShield AI Video Analytics", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.include_router(osint_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -613,12 +618,103 @@ def get_ocr_summary(camera_id: str | None = None):
     return get_ocr_analytics(camera_id=camera_id)
 
 
-@app.get("/api/watchlist")
+@app.get("/api/export/maltego")
+def export_maltego_graph(
+    camera_id: str | None = None,
+    entity: str = "faces",
+    limit: int = 1000,
+):
+    normalized_entity = (entity or "faces").strip().lower()
+    if normalized_entity not in {"faces", "vehicles", "plates", "events"}:
+        raise HTTPException(status_code=400, detail="entity must be one of: faces, vehicles, plates, events")
+    if limit < 1 or limit > 10000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 10000")
+
+    if normalized_entity == "faces":
+        records = get_face_records(limit=limit, camera_id=camera_id)
+        rows = [
+            {
+                "entity_type": "Face",
+                "camera_id": record.get("camera_id"),
+                "tracker_id": record.get("tracker_id"),
+                "identity": record.get("identity") or "Anonymous",
+                "gender": record.get("gender") or "Unknown",
+                "age": record.get("age"),
+                "watchlist_hit": bool(record.get("watchlist_hit")),
+                "first_seen": record.get("first_seen"),
+                "last_seen": record.get("last_seen"),
+            }
+            for record in records
+        ]
+    elif normalized_entity == "vehicles":
+        records = get_vehicle_records(limit=limit, camera_id=camera_id, require_plate=False)
+        rows = [
+            {
+                "entity_type": "Vehicle",
+                "camera_id": record.get("camera_id"),
+                "tracker_id": record.get("tracker_id"),
+                "vehicle_type": record.get("vehicle_type") or "Unknown",
+                "plate_text": record.get("plate_text") or "",
+                "first_seen": record.get("first_seen"),
+                "last_seen": record.get("last_seen"),
+            }
+            for record in records
+        ]
+    elif normalized_entity == "plates":
+        records = get_plate_reads(limit=limit, camera_id=camera_id)
+        rows = [
+            {
+                "entity_type": "Plate",
+                "camera_id": record.get("camera_id"),
+                "tracker_id": record.get("tracker_id"),
+                "plate_text": record.get("plate_text") or "",
+                "vehicle_type": record.get("vehicle_type") or "Unknown",
+                "confidence": record.get("confidence"),
+                "ocr_source": record.get("ocr_source") or "unknown",
+                "first_seen": record.get("first_seen"),
+                "last_seen": record.get("last_seen"),
+            }
+            for record in records
+        ]
+    else:
+        records = get_recent_events(limit=limit, camera_id=camera_id)
+        rows = [
+            {
+                "entity_type": "Event",
+                "camera_id": record.get("camera_id"),
+                "event_type": record.get("type") or "event",
+                "detail": record.get("detail") or "",
+                "timestamp": record.get("timestamp"),
+            }
+            for record in records
+        ]
+
+    if not rows:
+        rows = [{"entity_type": normalized_entity.capitalize(), "camera_id": camera_id or ""}]
+
+    headers = list(rows[0].keys())
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=headers)
+    writer.writeheader()
+    writer.writerows(rows)
+    payload = stream.getvalue().encode("utf-8")
+    stream.close()
+
+    scoped = camera_id or "all_cameras"
+    filename = f"maltego_{normalized_entity}_{scoped}.csv"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/watchlist/files")
 def get_watchlist():
     return {"entries": list_watchlist_entries()}
 
 
-@app.post("/api/watchlist")
+@app.post("/api/watchlist/files")
 async def add_watchlist_entry(name: str = Form(...), file: UploadFile = File(...)):
     identity = sanitize_watchlist_name(name)
     if not identity:
@@ -636,7 +732,7 @@ async def add_watchlist_entry(name: str = Form(...), file: UploadFile = File(...
     return {"status": "success", "entry": {"identity": identity, "filename": target_path.name}}
 
 
-@app.delete("/api/watchlist/{identity}")
+@app.delete("/api/watchlist/files/{identity}")
 def delete_watchlist_entry(identity: str):
     safe_identity = sanitize_watchlist_name(identity)
     if not safe_identity:

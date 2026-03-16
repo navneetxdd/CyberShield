@@ -19,9 +19,9 @@
         body {
             font-family: 'IBM Plex Sans', sans-serif;
             background:
-                radial-gradient(circle at top left, rgba(59, 130, 246, 0.26), transparent 34%),
-                radial-gradient(circle at top right, rgba(20, 184, 166, 0.20), transparent 28%),
-                linear-gradient(180deg, #000000 0%, #0a0a0a 52%, #050505 100%);
+                radial-gradient(circle at top left, rgba(59, 130, 246, 0.12), transparent 48%),
+                radial-gradient(circle at top right, rgba(20, 184, 166, 0.08), transparent 46%),
+                #000000;
             color: var(--text);
         }
 
@@ -41,7 +41,7 @@
             overflow: hidden;
             border-radius: 1rem;
             padding: 1.5rem;
-            background: linear-gradient(180deg, rgba(15, 26, 47, 0.95), rgba(9, 17, 31, 0.95));
+            background: linear-gradient(180deg, rgba(6, 11, 20, 0.98), rgba(0, 0, 0, 0.98));
             border: 1px solid rgba(96, 165, 250, 0.12);
         }
 
@@ -129,9 +129,9 @@
             }
 
             .health-pill-warn {
-                color: #fcd34d;
-                background: rgba(245, 158, 11, 0.12);
-                border: 1px solid rgba(245, 158, 11, 0.28);
+                color: #ffffff;
+                background: rgba(245, 158, 11, 0.22);
+                border: 1px solid rgba(245, 158, 11, 0.42);
             }
 
             .health-pill-error {
@@ -233,7 +233,7 @@
 
             <div class="flex flex-wrap items-center gap-3">
                 <div class="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-200">
-                    <span class="inline-flex items-center gap-2">
+                    <span class="inline-flex items-center gap-2" aria-label="System connection status">
                         <span class="relative flex h-2.5 w-2.5">
                             <span id="statusIndicatorPing" class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-70 hidden"></span>
                             <span id="statusIndicatorColor" class="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500"></span>
@@ -245,7 +245,18 @@
                 <a id="reportLink" href="#" target="_blank" class="rounded-xl border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-medium text-white transition hover:border-slate-500 hover:bg-slate-700">
                     Download Report
                 </a>
+                <a id="maltegoExportLink" href="#" target="_blank" class="rounded-xl border border-indigo-500 bg-indigo-600 px-4 py-2 text-sm font-medium text-indigo-100 transition hover:border-indigo-500 hover:bg-indigo-700">
+                    Export Maltego Graph
+                </a>
 
+                <select id="maltegoEntitySelector" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white">
+                    <option value="faces">Faces</option>
+                    <option value="vehicles">Vehicles</option>
+                    <option value="plates">Plates</option>
+                    <option value="events">Events</option>
+                </select>
+
+                <label for="cameraSelector" class="sr-only">Select active camera</label>
                 <select id="cameraSelector" class="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white">
                     <option value="">Select Camera...</option>
                 </select>
@@ -259,18 +270,18 @@
         </div>
     </nav>
 
-    <div id="addCameraModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm">
+    <div id="addCameraModal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="addCameraModalTitle">
         <div class="glass-panel w-full max-w-md rounded-3xl p-6">
-            <h3 class="display-font text-xl font-bold text-white">Add Video Source</h3>
+            <h3 id="addCameraModalTitle" class="display-font text-xl font-bold text-white">Add Video Source</h3>
             <p class="mt-1 text-sm text-slate-400">Use a camera ID, RTSP stream, webcam index, or upload a file.</p>
 
             <div class="mt-5 space-y-4">
                 <div>
-                    <label class="mb-1 block text-sm text-slate-300">Camera ID</label>
+                    <label for="newCamId" class="mb-1 block text-sm text-slate-300">Camera ID</label>
                     <input id="newCamId" type="text" placeholder="gate_north" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
                 </div>
                 <div>
-                    <label class="mb-1 block text-sm text-slate-300">Source</label>
+                    <label for="newCamSource" class="mb-1 block text-sm text-slate-300">Source</label>
                     <input id="newCamSource" type="text" placeholder="rtsp://..., webcam index 0, or URL" class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none">
                 </div>
             </div>
@@ -511,7 +522,7 @@
                             <span id="incidentCountBadge" class="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs text-slate-300">0 open</span>
                         </div>
                     </div>
-                    <div id="incidentRail" class="max-h-[28rem] overflow-y-auto px-5 py-4">
+                    <div id="incidentRail" class="max-h-[28rem] overflow-y-auto px-5 py-4" aria-live="polite" aria-label="Operational incidents feed">
                         <div class="incident-card incident-info">
                             <p class="text-sm font-medium text-blue-200">No active incidents</p>
                             <p class="mt-1 text-sm text-slate-300">Critical operator events will surface here as the pipeline processes traffic and face analytics.</p>
@@ -646,6 +657,8 @@
         const statusPing = document.getElementById('statusIndicatorPing');
         const statusText = document.getElementById('systemStatusText');
         const reportLink = document.getElementById('reportLink');
+        const maltegoExportLink = document.getElementById('maltegoExportLink');
+        const maltegoEntitySelector = document.getElementById('maltegoEntitySelector');
         const cameraSelector = document.getElementById('cameraSelector');
 
         function clearNode(node) {
@@ -673,15 +686,22 @@
         }
 
         function updateReportLink() {
+            const selectedEntity = maltegoEntitySelector?.value || 'faces';
             if (!activeCamera) {
                 reportLink.href = '#';
                 reportLink.classList.add('pointer-events-none', 'opacity-50');
                 reportLink.setAttribute('aria-disabled', 'true');
+                maltegoExportLink.href = '#';
+                maltegoExportLink.classList.add('pointer-events-none', 'opacity-50');
+                maltegoExportLink.setAttribute('aria-disabled', 'true');
                 return;
             }
             reportLink.href = `/api/reports/download?camera_id=${encodeURIComponent(activeCamera)}`;
             reportLink.classList.remove('pointer-events-none', 'opacity-50');
             reportLink.removeAttribute('aria-disabled');
+            maltegoExportLink.href = `/api/export/maltego?camera_id=${encodeURIComponent(activeCamera)}&entity=${encodeURIComponent(selectedEntity)}`;
+            maltegoExportLink.classList.remove('pointer-events-none', 'opacity-50');
+            maltegoExportLink.removeAttribute('aria-disabled');
         }
 
         function addCameraToDropdown(cameraId, selectIt = false) {
@@ -1481,6 +1501,10 @@
             if (event.target.value) {
                 switchCamera(event.target.value);
             }
+        });
+
+        maltegoEntitySelector?.addEventListener('change', () => {
+            updateReportLink();
         });
 
         async function submitNewCamera() {

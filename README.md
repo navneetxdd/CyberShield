@@ -168,7 +168,7 @@ Everything runs locally with no mandatory cloud dependencies. Cloud ANPR enrichm
 - **pip** and **venv**
 - **4 GB RAM minimum** (8 GB+ recommended for simultaneous face + plate analysis)
 - NVIDIA GPU with CUDA optional but recommended for real-time multi-stream use
-- Internet access on first run to download model weights (YOLOv8, InsightFace, OCR assets)
+- Internet access on first run to download model weights/assets (`yolo11s` detector, optional plate `best.pt` fallback, InsightFace, OCR assets)
 
 ---
 
@@ -443,3 +443,15 @@ CyberShield stores all data in `integrated-video-analytics/analytics.db` — a s
 | `metrics` | Time-series KPI snapshots for trend charts |
 
 The database is auto-created on first run. No migration steps are needed.
+
+## Maltego & Gemini Integration
+
+### Maltego Investigation Graph Export
+- Export faces, vehicles, plates, or events as CSV for Maltego graph import.
+- Use the dashboard 'Export Maltego Graph' button to download the CSV for the selected camera.
+- API endpoint: `/api/export/maltego?camera_id=CAM_ID&entity=faces|vehicles|plates|events`
+
+### Gemini 2.0 Flash Enrichment
+- Backend stub for Gemini enrichment is present in the pipeline.
+- Future integration will enrich analytics records (faces, vehicles, plates, events) using Gemini 2.0 Flash API.
+- Enrichment results will be surfaced in the dashboard and incident rail.

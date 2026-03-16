@@ -105,3 +105,59 @@ def test_cloud_ocr_min_confidence_floor(monkeypatch):
     result = pipeline.VideoPipeline._extract_plate_cloud(extractor, CropStub())
 
     assert result is None
+
+
+def _build_governor_subject() -> pipeline.VideoPipeline:
+    subject = pipeline.VideoPipeline.__new__(pipeline.VideoPipeline)
+    subject.device = "cuda:0"
+    subject.adaptive_governor_enabled = True
+    subject._adaptive_mode = "normal"
+    subject._adaptive_pending_mode = "normal"
+    subject._adaptive_pending_frames = 0
+    subject._adaptive_target_fps = 18.0
+    subject._adaptive_max_infer_ms = 85.0
+    subject._adaptive_infer_ema_ms = 55.0
+    subject._base_sahi_enabled = True
+    subject._base_heavy_enabled = True
+    subject._base_rtdetr_enabled = True
+    subject._effective_sahi_enabled = True
+    subject._effective_heavy_enabled = True
+    subject._effective_rtdetr_enabled = True
+    subject._effective_sahi_interval = 1
+    subject._effective_heavy_interval = 1
+    subject._effective_rtdetr_interval = 1
+    return subject
+
+
+def test_determine_adaptive_mode_enters_pressure_when_fps_drops():
+    subject = _build_governor_subject()
+    subject._adaptive_infer_ema_ms = 50.0
+
+    mode = pipeline.VideoPipeline._determine_adaptive_mode(subject, analytics_fps=12.0)
+
+    assert mode == "pressure"
+
+
+def test_update_adaptive_governor_respects_hysteresis(monkeypatch):
+    subject = _build_governor_subject()
+    subject._adaptive_infer_ema_ms = 120.0
+    monkeypatch.setattr(pipeline, "ADAPTIVE_HYSTERESIS_FRAMES", 2)
+
+    pipeline.VideoPipeline._update_adaptive_governor(subject, {"analytics_fps": 20.0})
+    assert subject._adaptive_mode == "normal"
+    assert subject._adaptive_pending_mode == "pressure"
+
+    pipeline.VideoPipeline._update_adaptive_governor(subject, {"analytics_fps": 20.0})
+    assert subject._adaptive_mode == "pressure"
+
+
+def test_apply_adaptive_policy_pressure_disables_costly_stages():
+    subject = _build_governor_subject()
+    subject._adaptive_mode = "pressure"
+
+    pipeline.VideoPipeline._apply_adaptive_policy(subject)
+
+    assert subject._effective_sahi_enabled is False
+    assert subject._effective_rtdetr_enabled is False
+    assert subject._effective_heavy_enabled is True
+    assert subject._effective_heavy_interval >= pipeline.HEAVY_VALIDATOR_INTERVAL
