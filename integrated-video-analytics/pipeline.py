@@ -275,6 +275,14 @@ ADAPTIVE_HYSTERESIS_FRAMES = read_env_int("CYBERSHIELD_ADAPTIVE_HYSTERESIS_FRAME
 
 PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "").strip()
 
+ENABLE_WEAPON_DETECT = read_env_bool("CYBERSHIELD_ENABLE_WEAPON_DETECT", False)
+WEAPON_DETECT_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_DETECT_CONFIDENCE", 0.50, minimum=0.05, maximum=0.95)
+WEAPON_FRAME_SNAPSHOT_MAX_SIZE_KB = read_env_int("CYBERSHIELD_WEAPON_SNAPSHOT_KB", 50, minimum=10, maximum=500)
+
+DEFAULT_WEAPON_MODEL_URL = (
+    "https://huggingface.co/arnabdhar/YOLOv8-Weapon-Detection/resolve/main/best.pt"
+)
+
 DETECTION_MODEL_NAME = resolve_model_path(
     os.getenv("CYBERSHIELD_DETECT_MODEL"),
     BASE_DIR / detector_fallback_name(),
@@ -285,11 +293,17 @@ PLATE_MODEL_NAME = resolve_model_path(
     BASE_DIR / "weights" / "best.pt",
     fallback=DEFAULT_PLATE_MODEL_URL,
 )
+WEAPON_MODEL_NAME = resolve_model_path(
+    os.getenv("CYBERSHIELD_WEAPON_MODEL"),
+    BASE_DIR / "weights" / "weapon_best.pt",
+    fallback=DEFAULT_WEAPON_MODEL_URL,
+)
 
 
 class SharedResources:
     _detector: Optional[YOLO] = None
     _plate_detector: Optional[YOLO] = None
+    _weapon_detector: Optional[YOLO] = None
     _face_analyzer = None
     _ocr_reader = None
     _paddle_ocr_reader = None
@@ -299,6 +313,7 @@ class SharedResources:
 
     detector_lock = threading.Lock()
     plate_lock = threading.Lock()
+    weapon_lock = threading.Lock()
     face_lock = threading.Lock()
     init_lock = threading.Lock()
 
@@ -357,6 +372,22 @@ class SharedResources:
                     cls._set_initialization_error("plate_detector", exc)
                     cls._plate_detector = None
             return cls._plate_detector
+
+    @classmethod
+    def get_weapon_detector(cls) -> Optional[YOLO]:
+        if not ENABLE_WEAPON_DETECT:
+            return None
+        with cls.init_lock:
+            if cls._weapon_detector is None:
+                try:
+                    print(f"Loading weapon detector: {WEAPON_MODEL_NAME}")
+                    cls._weapon_detector = YOLO(WEAPON_MODEL_NAME)
+                    cls._clear_initialization_error("weapon_detector")
+                except Exception as exc:
+                    print(f"Weapon detector unavailable: {exc}")
+                    cls._set_initialization_error("weapon_detector", exc)
+                    cls._weapon_detector = None
+            return cls._weapon_detector
 
     @classmethod
     def get_heavy_validator(cls) -> Optional[YOLO]:
@@ -460,6 +491,7 @@ class SharedResources:
 def warm_shared_resources() -> None:
     SharedResources.get_detector()
     SharedResources.get_plate_detector()
+    SharedResources.get_weapon_detector()
     SharedResources.get_face_analyzer()
     SharedResources.get_paddle_ocr_reader()
     SharedResources.get_ocr_reader()

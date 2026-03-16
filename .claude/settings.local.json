@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls \"C:\\\\Users\\\\jaipr\\\\Downloads\\\\CyberShield\\\\.claude\\\\worktrees\\\\stupefied-euclid\\\\integrated-video-analytics/.venv/Scripts/python\"*)",
+      "Bash(cmd.exe /c \"where python\")",
+      "Bash(cmd.exe /c \"py -3 --version\")",
+      "Bash(cmd.exe /c \"python3 --version\")",
+      "Bash(cmd.exe /c \"python --version\")",
+      "Bash(powershell.exe -Command \"Get-Command python, python3, py -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Launcher\\\\py.exe'' -3 --version\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Launcher\\\\py.exe'' -3 -c \"\"import sys; print\\(sys.executable\\)\"\"\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'' -c \"\"import uvicorn\"\" 2>&1\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'' -c \"\"import fastapi\"\" 2>&1\")",
+      "Bash(powershell.exe -Command \"& ''''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'''' run.py 2>&1\")",
+      "Bash(powershell.exe -Command \"Invoke-WebRequest -Uri ''http://localhost:8080/api/health'' -UseBasicParsing | Select-Object -ExpandProperty StatusCode\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'' -c \"\"from pipeline import WEAPON_MODEL_NAME, ENABLE_WEAPON_DETECT; print\\(f''Weapon detection enabled: {ENABLE_WEAPON_DETECT}''\\); print\\(f''Weapon model: {WEAPON_MODEL_NAME}''\\)\"\"\")",
+      "Bash(powershell.exe -Command \"& ''''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'''' -c \"\"from database import insert_weapon_event, get_weapon_events, acknowledge_weapon_event, get_weapon_summary; print\\(''''✓ All weapon DB functions imported successfully''''\\)\"\"\")",
+      "Bash(powershell.exe -Command \"& ''''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'''' -c \"\"from database import insert_weapon_event, get_weapon_events, acknowledge_weapon_event, get_weapon_summary; print\\(''''OK: All weapon DB functions imported successfully''''\\)\"\"\")",
+      "Bash(powershell.exe -Command \"& ''''C:\\\\Users\\\\jaipr\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe'''' -m py_compile main.py && echo ''''OK: main.py compiles''''\")",
+      "Bash(python -m py_compile main.py)",
+      "Bash(\"C:/Users/jaipr/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import sys; sys.path.insert\\(0, ''''integrated-video-analytics''''\\); from main import app; print\\(''''OK: main.py imports successfully''''\\)\")"
+    ]
+  }
+}

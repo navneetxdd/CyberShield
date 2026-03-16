@@ -125,6 +125,21 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS weapon_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                camera_id TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                weapon_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                bounding_box TEXT,
+                frame_snapshot BLOB,
+                acknowledged INTEGER NOT NULL DEFAULT 0,
+                acknowledged_at DATETIME
+            )
+            """
+        )
 
         event_columns = _get_columns(conn, "events")
         if "camera_id" not in event_columns:
@@ -153,6 +168,9 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_records_camera_tracker ON vehicle_records(camera_id, tracker_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_weapon_events_camera_timestamp ON weapon_events(camera_id, timestamp DESC)"
         )
         conn.commit()
     finally:
@@ -580,6 +598,109 @@ def get_ocr_analytics(camera_id: Optional[str] = None) -> Dict[str, Any]:
     except Exception as exc:
         print(f"DB Error: {exc}")
         return {"total_reads": 0, "average_confidence": 0.0, "sources": []}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def insert_weapon_event(
+    camera_id: str,
+    weapon_type: str,
+    confidence: float,
+    bounding_box: Optional[str] = None,
+    frame_snapshot: Optional[bytes] = None,
+) -> None:
+    def action(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            INSERT INTO weapon_events (camera_id, weapon_type, confidence, bounding_box, frame_snapshot)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (camera_id, weapon_type, confidence, bounding_box, frame_snapshot),
+        )
+
+    _run_write(action, "insert_weapon_event")
+
+
+def get_weapon_events(
+    limit: int = 50,
+    camera_id: Optional[str] = None,
+    unacknowledged_only: bool = False,
+) -> List[dict]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        query = "SELECT * FROM weapon_events WHERE 1=1"
+        params: List[Any] = []
+
+        if camera_id:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+
+        if unacknowledged_only:
+            query += " AND acknowledged = 0"
+
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+    except Exception as exc:
+        print(f"DB Error (get_weapon_events): {exc}")
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def acknowledge_weapon_event(event_id: int) -> bool:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def action(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE weapon_events
+            SET acknowledged = 1, acknowledged_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, event_id),
+        )
+
+    return _run_write(action, "acknowledge_weapon_event")
+
+
+def get_weapon_summary(camera_id: Optional[str] = None) -> Dict[str, Any]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        query = "SELECT weapon_type, COUNT(*) as count FROM weapon_events WHERE 1=1"
+        params: List[Any] = []
+
+        if camera_id:
+            query += " AND camera_id = ?"
+            params.append(camera_id)
+
+        query += " GROUP BY weapon_type ORDER BY count DESC"
+
+        rows = conn.execute(query, params).fetchall()
+        weapon_breakdown = {row["weapon_type"]: row["count"] for row in rows}
+
+        total_query = "SELECT COUNT(*) as total, COUNT(CASE WHEN acknowledged=0 THEN 1 END) as unacknowledged FROM weapon_events WHERE 1=1"
+        total_params: List[Any] = []
+        if camera_id:
+            total_query += " AND camera_id = ?"
+            total_params.append(camera_id)
+
+        total_row = conn.execute(total_query, total_params).fetchone()
+
+        return {
+            "total_weapon_events": int(total_row["total"] or 0),
+            "unacknowledged_count": int(total_row["unacknowledged"] or 0),
+            "weapon_breakdown": weapon_breakdown,
+        }
+    except Exception as exc:
+        print(f"DB Error (get_weapon_summary): {exc}")
+        return {"total_weapon_events": 0, "unacknowledged_count": 0, "weapon_breakdown": {}}
     finally:
         if conn is not None:
             conn.close()

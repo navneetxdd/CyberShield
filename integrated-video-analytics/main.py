@@ -24,6 +24,7 @@ from fpdf.enums import XPos, YPos
 from matplotlib import pyplot as plt
 
 from database import (
+    acknowledge_weapon_event,
     get_face_records,
     get_metric_history,
     get_ocr_analytics,
@@ -31,6 +32,9 @@ from database import (
     get_recent_events,
     get_traffic_analytics,
     get_vehicle_records,
+    get_weapon_events,
+    get_weapon_summary,
+    insert_weapon_event,
 )
 from pipeline import get_system_health_snapshot, has_any_ocr_path, warm_shared_resources
 from runtime import CameraRuntime
@@ -1058,6 +1062,34 @@ async def download_report(camera_id: str):
             "Content-Disposition": f'attachment; filename="CyberShield_{camera_id}_Analytics_Report.pdf"'
         },
     )
+
+
+@app.get("/api/weapons/events")
+def get_weapons_list(
+    limit: int = 50,
+    camera_id: str | None = None,
+    unacknowledged_only: bool = False,
+):
+    return {
+        "events": get_weapon_events(
+            limit=limit,
+            camera_id=camera_id,
+            unacknowledged_only=unacknowledged_only,
+        )
+    }
+
+
+@app.get("/api/weapons/summary")
+def get_weapons_summary(camera_id: str | None = None):
+    return get_weapon_summary(camera_id=camera_id)
+
+
+@app.post("/api/weapons/acknowledge/{event_id}")
+def acknowledge_weapon(event_id: int):
+    success = acknowledge_weapon_event(event_id)
+    if not success:
+        raise HTTPException(status_code=400, detail="Failed to acknowledge weapon event")
+    return {"status": "success", "event_id": event_id}
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

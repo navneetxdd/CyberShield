@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "CyberShield Backend",
+      "runtimeExecutable": "C:\\Users\\jaipr\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
+      "runtimeArgs": ["run.py"],
+      "port": 8080
+    }
+  ]
+}

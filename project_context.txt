@@ -1,0 +1,466 @@
+================================================================================
+PROJECT CONTEXT: CyberShield AI Video Analytics Platform
+================================================================================
+
+PROJECT NAME: CyberShield
+DESCRIPTION: Production-grade AI video analytics platform combining vehicle detection,
+automatic number plate recognition (ANPR), facial recognition, watchlist alerting,
+and real-time operator dashboarding in a single FastAPI application.
+
+REPOSITORY: https://github.com/navneetxdd/CyberShield
+STATUS: Active development
+CURRENT BRANCH: claude/stupefied-euclid
+
+================================================================================
+QUICK FACTS
+================================================================================
+
+Language: Python 3.10+
+Framework: FastAPI + Uvicorn
+Database: SQLite (WAL mode)
+Frontend: React (TypeScript) with Tailwind CSS, Chart.js
+Primary Port: 8080
+Architecture: Modular AI pipeline processing camera feeds or uploaded videos
+
+Key Technologies:
+  - Object Detection: YOLO11s (vehicles/people), YOLOv8 (plates)
+  - Multi-object Tracking: ByteTrack (via Supervision)
+  - OCR Stack: PaddleOCR → EasyOCR → Optional Cloud (Plate Recognizer API)
+  - Face Analysis: InsightFace buffalo_l (512-d embeddings)
+  - Video I/O: OpenCV
+  - Reporting: fpdf2 + Matplotlib
+  - Testing: pytest
+
+================================================================================
+SYSTEM ARCHITECTURE
+================================================================================
+
+Data Flow Pipeline:
+1. INGEST: CameraRuntime opens VideoCapture (IP camera or file) → bounded queue
+2. DETECT: YOLO11s inference → bounding boxes + class labels
+3. TRACK: ByteTrack → stable integer track IDs across frames
+4. ANPR: Plate detector (YOLOv8) → OCR stack (3-tier fallback) → vote accumulation
+5. FACE: InsightFace → 512-d embeddings → cosine similarity watchlist match
+6. PERSIST: Confirmed data written to SQLite via database.py
+7. STREAM: MJPEG annotated frames + WebSocket state broadcast
+8. DASHBOARD: Single-page React app polls WebSocket/REST endpoints
+
+Key Modules:
+  - main.py: FastAPI application, all HTTP/WebSocket routes, PDF exports
+  - pipeline.py: VideoPipeline class - core AI inference and analytics
+  - runtime.py: CameraRuntime - lifecycle management, frame queue handling
+  - database.py: SQLite query layer, record persistence and filtering
+  - camera.py: Camera utility functions
+  - osint_reid/: Cross-camera identity matching and OSINT integration
+
+================================================================================
+KEY FEATURES
+================================================================================
+
+Vehicle Intelligence:
+  - YOLO11s object detection (car, motorcycle, bus, truck, person)
+  - ByteTrack multi-object tracking with unique track IDs per vehicle
+  - Vehicle counting, class breakdown, occupancy metrics
+  - Per-vehicle plate association with confidence scoring
+
+ANPR (Automatic Number Plate Recognition):
+  - Dedicated YOLOv8 plate detector (fine-tuned best.pt)
+  - Three-tier OCR stack with automatic per-frame fallback:
+    • Tier 1: PaddleOCR (primary, fastest)
+    • Tier 2: EasyOCR (fallback for low-confidence Paddle results)
+    • Tier 3: Cloud OCR via Plate Recognizer API (opt-in, rate-limited)
+  - Confidence-weighted vote accumulation per vehicle tracker
+  - Plate confirmation requires aggregate evidence threshold
+  - Regex validation: ^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{3,4}$
+  - pending_plates state visible in operator incident rail before confirmation
+
+Facial Recognition & Watchlist:
+  - InsightFace buffalo_l model → 512-d face embeddings
+  - Age estimation and gender classification per face
+  - Cosine-similarity watchlist matching with configurable threshold
+  - Watchlist identities managed via dashboard or watchlist/ directory
+  - Watchlist hits generate immediate operator alerts and event logs
+
+Operator Dashboard (React SPA):
+  - Operations Overview KPI strip (total vehicles, faces, plate reads, OCR breakdown)
+  - Operational Incidents rail (real-time watchlist hits, low-conf plates, pending ANPR)
+  - Live MJPEG camera stream per feed
+  - Historical trend charts (traffic flow, vehicle class, gender)
+  - Searchable, filterable record tabs (plates, faces, vehicles)
+  - Collapsible administration section for watchlist management
+  - PDF export of full analytic session
+
+Record Filters (applied at DB query layer):
+  - ANPR quality filter: minimum confidence percentage
+  - OCR source filter: isolate by paddle/easyocr/cloud origin
+  - Watchlist-only: surface only matched faces
+  - Vehicle with plate: show only vehicles with confirmed plate
+
+================================================================================
+DIRECTORY STRUCTURE
+================================================================================
+
+CyberShield/
+  run.py                              ← root launcher (start here)
+  pyrightconfig.json
+  README.md
+  benchmark_models.py
+
+  integrated-video-analytics/
+    main.py                           ← FastAPI routes, server startup
+    pipeline.py                       ← VideoPipeline class, AI inference
+    runtime.py                        ← CameraRuntime lifecycle mgmt
+    database.py                       ← SQLite access layer
+    camera.py                         ← camera utilities
+    requirements.txt
+    pytest.ini
+
+    analytics.db                      ← SQLite database (auto-created)
+    yolo11s.pt                        ← primary detector weights
+    weights/best.pt                   ← plate detector weights
+
+    templates/index.html              ← legacy fallback HTML
+
+    frontend/                         ← React SPA (separate build)
+      package.json
+      src/
+        components/        ← React components (dashboard, filters, charts)
+        App.tsx
+        index.tsx
+      static_ui/index.html ← built frontend (mounted on /assets)
+
+    static_ui/                        ← built React frontend
+      assets/
+      index.html
+
+    uploads/                          ← uploaded video files
+    watchlist/                        ← watchlist identity images
+
+    osint_reid/                       ← cross-camera identity matching
+      api.py                ← OSINT API endpoints
+      service.py
+      camera_graph.py
+      cross_camera_matcher.py
+      vehicle_classifier.py
+      reid_worker.py
+      aggregation.py
+      db.py
+      config.py
+      tests/test_end_to_end.py
+
+    config/                           ← configuration files
+    migrations/                       ← database migrations
+    demos/
+      enrich_demo.py        ← Gemini enrichment demo stub
+
+    tests/
+      conftest.py
+      test_main.py          ← API integration tests
+      test_pipeline.py      ← pipeline unit tests
+      test_database.py      ← database query tests
+
+================================================================================
+CONFIGURATION (Environment Variables)
+================================================================================
+
+Core:
+  CYBERSHIELD_DETECT_MODEL              [default: auto]
+  CYBERSHIELD_PLATE_MODEL               [default: HuggingFace URL]
+  CYBERSHIELD_DETECT_IMGSZ              [default: 896]
+  CYBERSHIELD_MAX_UPLOAD_SIZE           [default: 512MB]
+  CYBERSHIELD_ALLOWED_ORIGINS           [default: *]
+  CYBERSHIELD_PRELOAD_MODELS            [default: true]
+  CYBERSHIELD_REQUIRE_OCR_READY         [default: true]
+
+ANPR / OCR:
+  CYBERSHIELD_ENABLE_PADDLE_OCR         [default: true]
+  CYBERSHIELD_ENABLE_EASYOCR_FALLBACK   [default: true]
+  CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE  [default: 0.75]
+  CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE  [default: 0.78]
+  PLATE_RECOGNIZER_API_TOKEN            [optional, enables cloud OCR]
+
+Tracking:
+  CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD    [default: 0.13]
+  CYBERSHIELD_TRACK_MATCHING_THRESHOLD      [default: 0.65]
+  CYBERSHIELD_TRACK_LOST_BUFFER             [default: 60 frames]
+  CYBERSHIELD_TRACK_FRAME_RATE              [default: 8 CPU / 12 GPU]
+
+Throughput:
+  CYBERSHIELD_STREAM_MAX_FPS            [default: 14 CPU / 24 GPU]
+  CYBERSHIELD_ANALYTICS_FPS             [default: 8 CPU / 10 GPU]
+  CYBERSHIELD_TASK_REFRESH_FPS          [default: 6 CPU / 10 GPU]
+  CYBERSHIELD_WS_INTERVAL               [default: 1.0 seconds]
+
+================================================================================
+DATABASE SCHEMA
+================================================================================
+
+SQLite Database: integrated-video-analytics/analytics.db (WAL mode)
+
+Tables:
+  plate_reads
+    - plate_text, vehicle_type, confidence, ocr_source
+    - camera_id, timestamp, first_seen, last_seen
+
+  vehicles
+    - tracker_id, vehicle_type, plate_text (nullable)
+    - camera_id, first_seen, last_seen
+
+  faces
+    - identity (nullable), gender, age
+    - embedding_hash, watchlist_hit
+    - camera_id, tracker_id, first_seen, last_seen
+
+  events
+    - type, detail, camera_id
+    - timestamp
+
+  metrics (time-series KPIs)
+    - camera_id, timestamp
+    - vehicle_count, people_count
+    - peak counts, averages
+
+Auto-created on first run. No manual migration required.
+
+================================================================================
+API ENDPOINTS (Key Routes)
+================================================================================
+
+GET  /                                  → Dashboard HTML
+GET  /api/health                        → System health snapshot
+GET  /api/cameras                       → List active camera runtimes
+POST /api/cameras/add                   → Add camera (source: URL or file)
+DEL  /api/cameras/{camera_id}           → Stop and release camera
+
+GET  /api/video/stream                  → MJPEG stream (first camera)
+GET  /api/video/stream/{camera_id}      → MJPEG stream (specific camera)
+POST /api/video/upload                  → Upload video file
+GET  /api/analytics/status              → Camera state snapshot
+
+GET  /api/records/plates                → Plate history (filters: min_confidence, ocr_source)
+GET  /api/records/vehicles              → Vehicle history (filters: require_plate)
+GET  /api/records/faces                 → Face history (filters: watchlist_only)
+GET  /api/logs/history                  → Event log
+
+GET  /api/metrics                       → Time-series metric history
+GET  /api/analytics/traffic             → Hourly vehicle flow analysis
+GET  /api/analytics/ocr                 → OCR source/confidence distribution
+GET  /api/analytics/summary             → Aggregated analytics summary
+
+GET  /api/settings/face-threshold       → Get face match threshold
+POST /api/settings/face-threshold       → Set face match threshold
+
+GET  /api/watchlist/files               → List registered watchlist identities
+POST /api/watchlist/files               → Add watchlist identity (image upload)
+DEL  /api/watchlist/files/{identity}    → Remove watchlist identity
+
+GET  /api/reports/download              → Export PDF report
+GET  /api/export/maltego                → Export records as CSV (Maltego format)
+
+WS   /ws/analytics/{camera_id}          → WebSocket state updates (JSON)
+
+================================================================================
+TESTING
+================================================================================
+
+Test Framework: pytest
+
+Running Tests:
+  cd integrated-video-analytics
+  python -m pytest tests/ -v
+
+Test Suites:
+  test_main.py
+    - HTTP route correctness
+    - Filter parameter validation
+    - 400 error response paths
+
+  test_pipeline.py
+    - _is_plate_vote_confirmed() logic
+    - Cloud confidence floor enforcement
+    - Plate text normalization
+    - OCR fallback chain
+
+  test_database.py
+    - All record filter combinations
+    - Confidence filtering
+    - OCR source filtering
+    - Watchlist-only queries
+    - Require-plate queries
+
+Coverage: 23 tests, all critical paths
+
+================================================================================
+FRONTEND BUILDS
+================================================================================
+
+Frontend Stack: React + TypeScript + Tailwind CSS + Chart.js
+
+Building the Frontend:
+  cd integrated-video-analytics/frontend
+  npm install
+  npm run build
+
+Output: frontend/dist/ → mounted as /assets and /static_ui
+
+Development Mode:
+  npm run dev (runs on http://localhost:5173)
+  Backend CORS allows localhost:5173
+
+Component Structure:
+  - Dashboard layout and navigation
+  - Camera stream viewer (MJPEG)
+  - KPI strip (totals, OCR breakdown)
+  - Incident rail (watchlist hits, alerts)
+  - Record tables with inline filters
+  - Charts (trend, traffic, gender)
+  - Watchlist management UI
+  - PDF export controls
+
+================================================================================
+LATEST COMMITS & RECENT WORK
+================================================================================
+
+Commit: 7a523a2d
+  Message: CyberShield: UI refresh, ANPR optimization, and definitive technical audit
+  Scope: Dashboard improvements, plate detection tuning, documentation
+
+Commit: 232178fd
+  Message: feat: OSINT/ReID subsystem - cross-camera identity, vehicle classification, migrations, API, tests
+  Scope: Cross-camera person/vehicle matching, unified identity resolution
+
+Commit: db3d3b42
+  Message: Improve vehicle-recall defaults, clean model paths, and refresh docs
+  Scope: Performance tuning, default config improvements
+
+Commit: 5afa04af
+  Message: docs: replace stub root README with full project documentation
+  Scope: Comprehensive README with architecture diagrams, API reference
+
+================================================================================
+KNOWN LIMITATIONS & NOTES
+================================================================================
+
+1. Python 3.12+ not fully tested with all ML dependencies; 3.10-3.11 recommended
+2. GPU support is optional but recommended for real-time multi-stream processing
+3. Face threshold (RUNTIME_SETTINGS) is configurable at runtime via API
+4. Cloud OCR (Plate Recognizer) requires API token; system works fully local-only without it
+5. Watchlist matching uses cosine similarity; no deep learning re-ID beyond InsightFace
+6. OSINT/ReID subsystem is recent; cross-camera matching is production-ready but still evolving
+7. Model weights auto-download on first run (requires internet); cached locally thereafter
+
+================================================================================
+DEPLOYMENT NOTES
+================================================================================
+
+Quick Start:
+  1. cd integrated-video-analytics
+  2. python -m venv .venv && source .venv/bin/activate (or .venv\Scripts\activate on Windows)
+  3. pip install -r requirements.txt
+  4. cd .. && python run.py
+
+Server:
+  - Runs on 0.0.0.0:8080 by default
+  - Auto-reload enabled in development mode (watch for changes in integrated-video-analytics/)
+  - Uvicorn with StatReload
+
+Environment Setup:
+  - No mandatory environment variables (sensible defaults)
+  - Optional: set PLATE_RECOGNIZER_API_TOKEN for cloud OCR
+  - Optional: set CYBERSHIELD_PRELOAD_MODELS=true to warm models on startup (slower initial boot, faster inference)
+
+Database Initialization:
+  - Automatic on first run
+  - Uses SQLite WAL mode for better concurrency
+  - Located at: integrated-video-analytics/analytics.db
+
+Model Downloads:
+  - First run downloads: yolo11s.pt, best.pt (plate), InsightFace, PaddleOCR, EasyOCR assets
+  - Cached locally in standard locations after first run
+  - Total size: ~2-3 GB depending on OCR assets
+
+================================================================================
+COMMON UPGRADE PATHS
+================================================================================
+
+If upgrading this project, consider:
+
+1. **Model Updates**: Update YOLO versions, swap detectors, add new object classes
+2. **OCR Improvements**: Add new OCR providers, tune confidence thresholds, improve plate regex
+3. **Face Matching**: Upgrade to newer InsightFace models, tune similarity threshold
+4. **Dashboard**: Refactor React components, add new chart types, improve mobile responsiveness
+5. **Performance**: Optimize inference (TensorRT, ONNX export), batch processing, GPU utilization
+6. **Integrations**: Add new export formats (for SIEM, databases), external webhooks, API gateway
+7. **OSINT/ReID**: Expand cross-camera matching, vehicle color/type-based clustering
+8. **Compliance**: Add audit logging, user authentication, role-based access control
+9. **Scalability**: Multi-camera management, load balancing, distributed inference
+
+================================================================================
+OSINT/ReID SUBSYSTEM (NEW)
+================================================================================
+
+Location: integrated-video-analytics/osint_reid/
+
+Purpose:
+  - Cross-camera person and vehicle identity matching
+  - Unified identity resolution across multiple feeds
+  - Vehicle classification and tracking
+
+Key Files:
+  - service.py: Main OSINT service orchestration
+  - cross_camera_matcher.py: Cross-camera embedding similarity logic
+  - vehicle_classifier.py: Vehicle type and color classification
+  - camera_graph.py: Camera relationship and topology management
+  - reid_worker.py: Background worker for identity aggregation
+  - aggregation.py: Identity deduplication and consolidation
+  - api.py: OSINT API endpoints
+  - db.py: OSINT database schema and queries
+
+API Endpoints (osint_reid/api.py):
+  GET /api/osint/identities              → List all unified identities
+  GET /api/osint/identities/{id}         → Get identity details with cross-camera history
+  GET /api/osint/vehicles                → List vehicle identities
+  GET /api/osint/cameras                 → Camera relationship graph
+
+Integration:
+  - Registered as FastAPI router in main.py
+  - Runs alongside main analytics pipeline
+  - Shares database connection with main analytics.db
+  - Can be enabled/disabled via environment variable
+
+================================================================================
+GEMINI INTEGRATION (STUB)
+================================================================================
+
+Location: integrated-video-analytics/demos/enrich_demo.py
+
+Status: Stub implementation (not yet integrated into main pipeline)
+
+Purpose:
+  - Enrich analytics records (faces, vehicles, plates, events) with Gemini 2.0 Flash API
+  - Add contextual understanding and anomaly detection
+  - Provide natural-language incident summaries
+
+Future Integration Points:
+  - Pipeline.py: Post-inference enrichment hook
+  - main.py: /api/enrich endpoint for manual enrichment
+  - Dashboard: Enrichment results displayed in incident rail
+
+Setup:
+  - Requires GEMINI_API_KEY environment variable
+  - google-generativeai package already in requirements.txt
+
+================================================================================
+CONTACT & CONTRIBUTION
+================================================================================
+
+Repository: https://github.com/navneetxdd/CyberShield
+Issues: GitHub Issues (for bugs, feature requests)
+Documentation: README.md in repo root + this context file
+
+Current Maintainers: navneetxdd (primary)
+Active Contributors: (review commit history)
+
+================================================================================
+END OF CONTEXT
+================================================================================
