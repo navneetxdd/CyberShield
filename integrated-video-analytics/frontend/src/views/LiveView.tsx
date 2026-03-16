@@ -1,5 +1,6 @@
-import { useState, useCallback, useMemo } from "react";
-import { Plus, Pause, Camera as CameraIcon, Trash2, LayoutGrid, Maximize2, Play, X } from "lucide-react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { Plus, Pause, Camera as CameraIcon, Trash2, LayoutGrid, Maximize2, Play, X, Upload, CheckCircle2 } from "lucide-react";
+import { CONFIG } from "@/lib/config";
 import { CyberShieldState } from "@/pages/Index";
 import { CameraGrid } from "@/components/live/CameraGrid";
 import { VideoPlayer } from "@/components/VideoPlayer";
@@ -18,87 +19,216 @@ interface LiveViewProps {
   videoFlash?: boolean;
 }
 
-function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLaunched: () => void }) {
-  const [entries, setEntries] = useState([
-    { camera_id: "camera_1", source: "", delay_seconds: 0 },
-    { camera_id: "camera_2", source: "", delay_seconds: 15 },
-    { camera_id: "camera_3", source: "", delay_seconds: 30 },
-  ]);
-  const [launching, setLaunching] = useState(false);
-  const [done, setDone] = useState(false);
+const DEFAULT_DELAYS = [0, 15, 30];
+const DEFAULT_CAMERA_IDS = ["camera_1", "camera_2", "camera_3"];
 
-  const updateEntry = (i: number, field: string, value: any) => {
-    setEntries(prev => prev.map((e, idx) => idx === i ? { ...e, [field]: value } : e));
+interface DemoEntry {
+  camera_id: string;
+  file: File | null;
+  stagedPath: string;     // server path after staging
+  delay_seconds: number;
+  uploadProgress: number; // 0-100
+  uploadDone: boolean;
+  uploadError: string;
+}
+
+function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLaunched: () => void }) {
+  const [entries, setEntries] = useState<DemoEntry[]>(() =>
+    DEFAULT_CAMERA_IDS.map((id, i) => ({
+      camera_id: id,
+      file: null,
+      stagedPath: "",
+      delay_seconds: DEFAULT_DELAYS[i],
+      uploadProgress: 0,
+      uploadDone: false,
+      uploadError: "",
+    }))
+  );
+  const [status, setStatus] = useState<"idle" | "uploading" | "launching" | "done">("idle");
+  const [error, setError] = useState("");
+  const fileRefs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
+
+  const updateEntry = (i: number, patch: Partial<DemoEntry>) =>
+    setEntries(prev => prev.map((e, idx) => idx === i ? { ...e, ...patch } : e));
+
+  const handleFileSelect = (i: number, f: File) => {
+    updateEntry(i, { file: f, stagedPath: "", uploadDone: false, uploadProgress: 0, uploadError: "" });
   };
 
+  const stageFile = (entry: DemoEntry, i: number): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("file", entry.file!);
+      formData.append("camera_id", entry.camera_id);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${CONFIG.API_URL}/api/video/stage`);
+      xhr.setRequestHeader("X-API-Key", CONFIG.API_KEY);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          updateEntry(i, { uploadProgress: Math.round((e.loaded / e.total) * 100) });
+        }
+      };
+      xhr.onload = () => {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data?.status === "success" && data.path) {
+            updateEntry(i, { uploadDone: true, uploadProgress: 100, stagedPath: data.path });
+            resolve(data.path);
+          } else {
+            const msg = data?.detail || "Upload failed";
+            updateEntry(i, { uploadError: msg });
+            reject(new Error(msg));
+          }
+        } catch {
+          updateEntry(i, { uploadError: "Invalid server response" });
+          reject(new Error("Invalid server response"));
+        }
+      };
+      xhr.onerror = () => {
+        updateEntry(i, { uploadError: "Network error" });
+        reject(new Error("Network error"));
+      };
+      xhr.send(formData);
+    });
+
   const launch = async () => {
-    const valid = entries.filter(e => e.source.trim());
-    if (!valid.length) return;
-    setLaunching(true);
+    const active = entries.filter(e => e.file);
+    if (!active.length) { setError("Add at least one video file."); return; }
+    setError("");
+    setStatus("uploading");
+
     try {
-      const payload = valid.map(e => ({ ...e, delay_seconds: Number(e.delay_seconds) }));
-      await fetch("/api/demo/sequence", {
+      // Stage all files in parallel
+      const paths = await Promise.all(
+        entries.map((e, i) => e.file ? stageFile(e, i) : Promise.resolve(""))
+      );
+
+      setStatus("launching");
+      const payload = entries
+        .map((e, i) => ({ camera_id: e.camera_id, source: paths[i], delay_seconds: Number(e.delay_seconds) }))
+        .filter(e => e.source);
+
+      const res = await fetch(`${CONFIG.API_URL}/api/demo/sequence`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-API-Key": CONFIG.API_KEY },
         body: JSON.stringify(payload),
       });
-      setDone(true);
-      setTimeout(() => { onLaunched(); onClose(); }, 1500);
-    } catch {
-      /* ignore */
-    } finally {
-      setLaunching(false);
+      if (!res.ok) throw new Error(await res.text());
+
+      setStatus("done");
+      setTimeout(() => { onLaunched(); onClose(); }, 1800);
+    } catch (e: any) {
+      setError(e?.message || "Launch failed");
+      setStatus("idle");
     }
   };
 
+  const isLoading = status === "uploading" || status === "launching";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-      <div className="bg-panel border border-border rounded-lg w-[500px] p-5 relative">
-        <button onClick={onClose} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground">
+      <div className="bg-panel border border-border rounded-lg w-[560px] p-5 relative">
+        <button onClick={onClose} disabled={isLoading} className="absolute top-3 right-3 text-muted-foreground hover:text-foreground disabled:opacity-40">
           <X size={14} />
         </button>
-        <div className="text-[11px] font-mono text-primary uppercase tracking-widest mb-4 flex items-center gap-2">
+
+        <div className="text-[11px] font-mono text-primary uppercase tracking-widest mb-1 flex items-center gap-2">
           <Play size={13} /> Demo Sequence
         </div>
         <div className="text-[10px] text-muted-foreground mb-4">
-          Configure 3 camera feeds with staggered start times to simulate a person moving across cameras.
+          Upload 3 videos of the same person across different cameras. Each starts after a delay to simulate movement.
         </div>
+
+        {/* Column headers */}
+        <div className="grid grid-cols-[100px_1fr_70px] gap-2 mb-1 px-1">
+          <span className="text-[8px] font-mono text-muted-foreground uppercase tracking-widest">Camera ID</span>
+          <span className="text-[8px] font-mono text-muted-foreground uppercase tracking-widest">Video File</span>
+          <span className="text-[8px] font-mono text-muted-foreground uppercase tracking-widest">Delay (s)</span>
+        </div>
+
         {entries.map((entry, i) => (
-          <div key={i} className="flex items-center gap-2 mb-2">
+          <div key={i} className="grid grid-cols-[100px_1fr_70px] gap-2 mb-2 items-center">
+            {/* Camera ID */}
             <input
-              className="bg-background border border-border rounded px-2 py-1 text-[10px] font-mono w-24"
+              className="bg-background border border-border px-2 py-1.5 text-[10px] font-mono w-full"
               value={entry.camera_id}
-              onChange={e => updateEntry(i, "camera_id", e.target.value)}
-              placeholder="Camera ID"
+              onChange={e => updateEntry(i, { camera_id: e.target.value })}
+              disabled={isLoading}
             />
-            <input
-              className="bg-background border border-border rounded px-2 py-1 text-[10px] font-mono flex-1"
-              value={entry.source}
-              onChange={e => updateEntry(i, "source", e.target.value)}
-              placeholder="Video path or URL"
-            />
+
+            {/* File picker */}
+            <div>
+              <input
+                ref={fileRefs[i]}
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={e => e.target.files?.[0] && handleFileSelect(i, e.target.files[0])}
+              />
+              <button
+                onClick={() => fileRefs[i].current?.click()}
+                disabled={isLoading}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 border text-[10px] font-mono transition-colors ${
+                  entry.uploadDone
+                    ? "border-green-500/40 text-green-400 bg-green-500/5"
+                    : entry.file
+                    ? "border-primary/40 text-primary bg-primary/5"
+                    : "border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                } disabled:opacity-50`}
+              >
+                {entry.uploadDone ? (
+                  <><CheckCircle2 size={12} className="shrink-0" /><span className="truncate">{entry.file?.name}</span></>
+                ) : entry.file ? (
+                  <><Upload size={12} className="shrink-0" /><span className="truncate">{entry.file.name}</span></>
+                ) : (
+                  <><Upload size={12} className="shrink-0" /><span>Browse video…</span></>
+                )}
+              </button>
+
+              {/* Upload progress bar */}
+              {entry.file && !entry.uploadDone && entry.uploadProgress > 0 && (
+                <div className="h-0.5 bg-border mt-0.5">
+                  <div className="h-full bg-primary transition-all" style={{ width: `${entry.uploadProgress}%` }} />
+                </div>
+              )}
+              {entry.uploadError && (
+                <div className="text-[9px] text-red-400 mt-0.5">{entry.uploadError}</div>
+              )}
+            </div>
+
+            {/* Delay */}
             <div className="flex items-center gap-1">
-              <span className="text-[9px] text-muted-foreground">+</span>
               <input
                 type="number"
                 min={0}
                 max={300}
-                className="bg-background border border-border rounded px-2 py-1 text-[10px] font-mono w-14 text-center"
+                disabled={isLoading}
+                className="bg-background border border-border px-2 py-1.5 text-[10px] font-mono w-full text-center"
                 value={entry.delay_seconds}
-                onChange={e => updateEntry(i, "delay_seconds", e.target.value)}
+                onChange={e => updateEntry(i, { delay_seconds: Number(e.target.value) })}
               />
-              <span className="text-[9px] text-muted-foreground">s</span>
             </div>
           </div>
         ))}
-        <div className="flex justify-end mt-4">
+
+        {error && <div className="text-[10px] text-red-400 mb-3">{error}</div>}
+
+        <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
+          <div className="text-[9px] font-mono text-muted-foreground">
+            {status === "uploading" && "Uploading files…"}
+            {status === "launching" && "Launching sequence…"}
+            {status === "done" && "✓ Sequence launched!"}
+          </div>
           <button
             onClick={launch}
-            disabled={launching || done}
-            className="flex items-center gap-2 px-4 py-2 bg-primary/20 text-primary border border-primary/40 rounded text-[10px] font-mono uppercase tracking-wider hover:bg-primary/30 disabled:opacity-50"
+            disabled={isLoading || status === "done" || !entries.some(e => e.file)}
+            className="flex items-center gap-2 px-4 py-2 bg-primary/20 text-primary border border-primary/40 text-[10px] font-mono uppercase tracking-wider hover:bg-primary/30 disabled:opacity-40 transition-colors"
           >
-            <Play size={12} />
-            {done ? "Launched!" : launching ? "Launching..." : "Launch Sequence"}
+            {status === "done" ? <><CheckCircle2 size={12} /> Done!</> : <><Play size={12} /> Launch Sequence</>}
           </button>
         </div>
       </div>

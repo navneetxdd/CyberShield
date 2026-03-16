@@ -86,7 +86,8 @@
       "Bash(\"C:/Users/jaipr/Downloads/weapon_training_fast_log.txt\")",
       "Bash(\"C:/Users/jaipr/Downloads/check_training.py\":*)",
       "Bash(\"C:/Users/jaipr/AppData/Local/Programs/Python/Python313/python.exe\" \"C:/Users/jaipr/Downloads/check_training.py\")",
-      "Bash(\"C:/Users/jaipr/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/ -x -q)"
+      "Bash(\"C:/Users/jaipr/AppData/Local/Programs/Python/Python313/python.exe\" -m pytest tests/ -x -q)",
+      "Bash(\"C:/Users/jaipr/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import main\")"
     ]
   }
 }

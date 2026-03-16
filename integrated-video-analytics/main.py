@@ -508,7 +508,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def enforce_upload_limits(request: Request, call_next):
-    if request.url.path == "/api/video/upload":
+    if request.url.path in ("/api/video/upload", "/api/video/stage"):
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -566,6 +566,28 @@ async def remove_camera(camera_id: str):
         raise HTTPException(status_code=404, detail="Camera not found")
     release_camera(camera_id, drop_state=True)
     return {"status": "success", "camera_id": camera_id}
+
+
+@app.post("/api/video/stage")
+async def stage_video(request: Request, file: UploadFile = File(...), camera_id: str | None = None):
+    """Upload a video file and return its server path without mounting a camera."""
+    if camera_id is None:
+        form = await request.form()
+        raw_camera_id = form.get("camera_id")
+        if isinstance(raw_camera_id, str) and raw_camera_id.strip():
+            camera_id = raw_camera_id
+    camera_id = sanitize_camera_id(camera_id) if camera_id else next_camera_id()
+    safe_name = sanitize_upload_name(file.filename)
+    if Path(safe_name).suffix.lower() not in VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported video format.")
+    target_path = UPLOAD_DIR / f"{camera_id}_{int(time.time())}_{safe_name}"
+    await persist_upload(file, target_path)
+    return {
+        "status": "success",
+        "camera_id": camera_id,
+        "path": str(target_path),
+        "filename": safe_name,
+    }
 
 
 @app.post("/api/video/upload")
