@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { Camera, BarChart2, Users, Network, Settings } from "lucide-react";
+import { Camera, BarChart2, Users, Network, Settings, ShieldAlert } from "lucide-react";
 
-export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "settings";
+export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "weapons" | "settings";
 
 interface SidebarProps {
   activeView: ViewType;
   onNavigate: (view: ViewType) => void;
   systemHealth?: { cpu?: number; ram?: number; gpu?: number };
+  weaponAlertCount?: number;
 }
 
 const navItems: {
@@ -14,15 +15,17 @@ const navItems: {
   label: string;
   icon: React.ComponentType<{ size?: string | number; className?: string }>;
   bottom?: boolean;
+  danger?: boolean;
 }[] = [
   { id: "live",      label: "LIVE VIEW",  icon: Camera },
   { id: "analytics", label: "ANALYTICS",  icon: BarChart2 },
   { id: "watchlist", label: "WATCHLIST",  icon: Users },
   { id: "osint",     label: "OSINT",      icon: Network },
+  { id: "weapons",   label: "WEAPONS",    icon: ShieldAlert, danger: true },
   { id: "settings",  label: "SETTINGS",   icon: Settings, bottom: true },
 ];
 
-export function Sidebar({ activeView, onNavigate, systemHealth }: SidebarProps) {
+export function Sidebar({ activeView, onNavigate, systemHealth, weaponAlertCount = 0 }: SidebarProps) {
   const [expanded, setExpanded] = useState(false);
   const [collapseTimer, setCollapseTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
 
@@ -70,13 +73,20 @@ export function Sidebar({ activeView, onNavigate, systemHealth }: SidebarProps) 
               key={item.id}
               onClick={() => onNavigate(item.id)}
               style={{ height: 48, minHeight: 48 }}
-              className={`flex items-center gap-3 px-3.5 w-full text-left transition-all ${
+              className={`relative flex items-center gap-3 px-3.5 w-full text-left transition-all ${
                 isActive
-                  ? "bg-primary/8 text-primary"
-                  : "text-muted-foreground hover:bg-border/50 hover:text-foreground"
+                  ? item.danger ? "bg-red-500/10 text-red-400" : "bg-primary/8 text-primary"
+                  : item.danger
+                    ? "text-red-400/70 hover:bg-red-500/10 hover:text-red-400"
+                    : "text-muted-foreground hover:bg-border/50 hover:text-foreground"
               }`}
             >
               <Icon size={18} className="shrink-0" />
+              {item.id === "weapons" && weaponAlertCount > 0 && (
+                <span className="absolute top-2 left-6 min-w-[14px] h-[14px] rounded-full bg-red-500 text-[8px] font-mono font-bold text-white flex items-center justify-center px-0.5">
+                  {weaponAlertCount > 99 ? "99+" : weaponAlertCount}
+                </span>
+              )}
               {expanded && (
                 <span className="text-[11px] font-sans font-medium uppercase tracking-wider whitespace-nowrap animate-sidebar-expand">
                   {item.label}

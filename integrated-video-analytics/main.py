@@ -347,6 +347,8 @@ def get_initial_state(camera_id: str, source: str = "") -> dict:
         "detector_model": None,
         "plate_model": None,
         "device": "cpu",
+        "weapon_alert_count": 0,
+        "weapon_detect_enabled": False,
     }
 
 

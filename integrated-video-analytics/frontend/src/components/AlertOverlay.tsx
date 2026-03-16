@@ -37,11 +37,25 @@ export function AlertOverlay({ eventLogs, onFlash, enabled = true }: AlertOverla
     if (uid === lastSeenRef.current) return;
 
     const type = (latest.type || "").toUpperCase();
+    const isWeapon = type.includes("WEAPON_DETECTED") || type.includes("WEAPON");
     const isTactical =
       type.includes("TACTICAL") || type.includes("WATCHLIST") ||
       type.includes("BOLO") || type.includes("INTERCEPT");
 
-    if (isTactical) {
+    if (isWeapon) {
+      lastSeenRef.current = uid;
+      playBeep();
+      playBeep(); // double beep for weapon alerts
+      if (onFlash) {
+        onFlash(true);
+        setTimeout(() => onFlash(false), 3000);
+      }
+      toast.error(`!! WEAPON DETECTED: ${latest.detail}`, {
+        duration: 20000,
+        description: "ARMED THREAT — Immediate response required",
+        style: { borderColor: "rgb(239 68 68)", backgroundColor: "rgba(127, 29, 29, 0.95)" },
+      });
+    } else if (isTactical) {
       lastSeenRef.current = uid;
       playBeep();
       if (onFlash) {

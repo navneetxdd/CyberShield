@@ -630,7 +630,7 @@ def get_weapon_events(
     conn: Optional[sqlite3.Connection] = None
     try:
         conn = _connect()
-        query = "SELECT * FROM weapon_events WHERE 1=1"
+        query = "SELECT id, camera_id, timestamp, weapon_type, confidence, bounding_box, acknowledged, acknowledged_at FROM weapon_events WHERE 1=1"
         params: List[Any] = []
 
         if camera_id:

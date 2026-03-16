@@ -5,6 +5,7 @@ import { LiveView } from "@/views/LiveView";
 import { WatchlistView } from "@/views/WatchlistView";
 import { SettingsView } from "@/views/SettingsView";
 import { OSINTView } from "@/views/OSINTView";
+import { WeaponsView } from "@/views/WeaponsView";
 import { AlertOverlay } from "@/components/AlertOverlay";
 import { AddFeedModal } from "@/components/modals/AddFeedModal";
 import { PlateDetailModal } from "@/components/modals/PlateDetailModal";
@@ -38,6 +39,8 @@ export interface CyberShieldState {
   faces_detected?: number;
   plates_detected?: number;
   people_total_count?: number;
+  weapon_alert_count?: number;
+  weapon_detect_enabled?: boolean;
 }
 
 const defaultState: CyberShieldState = {
@@ -107,6 +110,7 @@ const Index = () => {
         case "a": setActiveView("analytics"); break;
         case "w": setActiveView("watchlist"); break;
         case "o": setActiveView("osint"); break;
+        case "x": setActiveView("weapons"); break;
         case "n": setAddFeedOpen(true); break;
         case "escape": setAddFeedOpen(false); break;
         case "1": case "2": case "3": case "4": case "5":
@@ -187,6 +191,7 @@ const Index = () => {
         activeView={activeView}
         onNavigate={setActiveView}
         systemHealth={systemHealth}
+        weaponAlertCount={state.weapon_alert_count ?? 0}
       />
 
       {/* CONTENT AREA */}
@@ -212,6 +217,7 @@ const Index = () => {
           <WatchlistView state={state} activeCamera={activeCamera} />
         )}
         {activeView === "osint" && <OSINTView />}
+        {activeView === "weapons" && <WeaponsView />}
         {activeView === "settings" && <SettingsView />}
       </div>
 

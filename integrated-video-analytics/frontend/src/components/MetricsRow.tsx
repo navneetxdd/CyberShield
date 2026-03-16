@@ -154,6 +154,12 @@ export function MetricsRow({ state }: MetricsRowProps) {
               <div className="text-[8px] font-mono text-muted-foreground uppercase truncate">{label}</div>
             </div>
           ))}
+          {(state as any).weapon_alert_count != null && (
+            <div className="col-span-2 text-center border border-red-500/30 bg-red-500/5 p-1.5">
+              <div className="text-[16px] font-mono font-bold text-red-400">{(state as any).weapon_alert_count}</div>
+              <div className="text-[8px] font-mono text-red-400/60 uppercase truncate">Weapon Alerts</div>
+            </div>
+          )}
         </div>
         <div className="absolute top-0 right-0 w-4 h-4 border-t border-r border-primary/20" />
       </div>

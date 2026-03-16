@@ -4,7 +4,8 @@
     {
       "name": "CyberShield Backend",
       "runtimeExecutable": "C:\\Users\\jaipr\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
-      "runtimeArgs": ["run.py"],
+      "runtimeArgs": ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"],
+      "cwd": "integrated-video-analytics",
       "port": 8080
     }
   ]

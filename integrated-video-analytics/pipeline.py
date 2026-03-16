@@ -57,6 +57,7 @@ except ImportError:
     HAS_GEMINI = False
 
 from database import (
+    insert_weapon_event,
     log_event,
     store_metric,
     upsert_face_record,
@@ -277,11 +278,10 @@ PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "").strip()
 
 ENABLE_WEAPON_DETECT = read_env_bool("CYBERSHIELD_ENABLE_WEAPON_DETECT", False)
 WEAPON_DETECT_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_DETECT_CONFIDENCE", 0.50, minimum=0.05, maximum=0.95)
+WEAPON_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_WEAPON_SCAN_INTERVAL", 1.0, minimum=0.1, maximum=10.0)
 WEAPON_FRAME_SNAPSHOT_MAX_SIZE_KB = read_env_int("CYBERSHIELD_WEAPON_SNAPSHOT_KB", 50, minimum=10, maximum=500)
 
-DEFAULT_WEAPON_MODEL_URL = (
-    "https://huggingface.co/arnabdhar/YOLOv8-Weapon-Detection/resolve/main/best.pt"
-)
+DEFAULT_WEAPON_MODEL_URL = "yolo12m.pt"
 
 DETECTION_MODEL_NAME = resolve_model_path(
     os.getenv("CYBERSHIELD_DETECT_MODEL"),
@@ -381,7 +381,8 @@ class SharedResources:
             if cls._weapon_detector is None:
                 try:
                     print(f"Loading weapon detector: {WEAPON_MODEL_NAME}")
-                    cls._weapon_detector = YOLO(WEAPON_MODEL_NAME)
+                    model = YOLO(WEAPON_MODEL_NAME)
+                    cls._weapon_detector = model
                     cls._clear_initialization_error("weapon_detector")
                 except Exception as exc:
                     print(f"Weapon detector unavailable: {exc}")
@@ -598,6 +599,7 @@ class VideoPipeline:
         self.device = "cuda:0" if self.gpu_available() else "cpu"
         self.detector = SharedResources.get_detector()
         self.plate_detector = SharedResources.get_plate_detector()
+        self.weapon_detector = SharedResources.get_weapon_detector()
         self.face_analyzer = SharedResources.get_face_analyzer()
 
         self.tracker = sv.ByteTrack(
@@ -631,6 +633,9 @@ class VideoPipeline:
         self.pending_face_futures: set[concurrent.futures.Future[Any]] = set()
         self.pending_db_futures: set[concurrent.futures.Future[Any]] = set()
         self.last_metric_write = 0.0
+        self.last_weapon_scan = 0.0
+        self.weapon_flash_until = 0.0
+        self._last_weapon_boxes: list[dict] = []
         self.last_low_confidence_log: Dict[int, float] = {}
         self.rider_proxy_track_ids: Dict[int, float] = {}
         self._cached_watchlist_embeddings: Dict[str, Optional[np.ndarray]] = {}
@@ -2117,6 +2122,26 @@ class VideoPipeline:
         )
         return zone_y
 
+    def _draw_weapon_overlay(self, frame) -> None:
+        """Draw weapon boxes and flash overlay on the frame."""
+        now = time.time()
+        weapon_boxes = self._last_weapon_boxes
+
+        # Semi-transparent red flash for 0.5 s after any detection
+        if self.weapon_flash_until > now and weapon_boxes:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (frame.shape[1], frame.shape[0]), (0, 0, 255), -1)
+            alpha = 0.20 * min(1.0, (self.weapon_flash_until - now) / 0.5)
+            cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+
+        # Bright-red boxes and labels for each detected weapon
+        for det in weapon_boxes:
+            x1, y1, x2, y2 = det["box"]
+            conf_pct = int(det["confidence"] * 100)
+            label = f"!! {det['weapon_type']} {conf_pct}%"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            self._draw_label(frame, label, (x1, max(y1 - 12, 20)), (0, 0, 255))
+
     def _draw_scene(self, frame):
         self._draw_zone(frame)
         with self.state_lock:
@@ -2155,7 +2180,91 @@ class VideoPipeline:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 self._draw_label(frame, label, (x1, min(y2 + 26, frame.shape[0] - 8)), color)
 
+        self._draw_weapon_overlay(frame)
         return frame
+
+    def _run_weapon_inference(self, frame, state: Dict[str, Any]) -> None:
+        """Run weapon detector on the current frame and persist any detections."""
+        if self.weapon_detector is None or not ENABLE_WEAPON_DETECT:
+            return
+        now = time.time()
+        if now - self.last_weapon_scan < WEAPON_SCAN_INTERVAL_SECONDS:
+            return
+        self.last_weapon_scan = now
+
+        try:
+            results = self.weapon_detector(frame, verbose=False, conf=WEAPON_DETECT_CONFIDENCE)
+        except Exception as exc:
+            print(f"Weapon inference error: {exc}")
+            return
+
+        # Classes to ignore (non-weapon classes in surveillance datasets)
+        _SKIP_LABELS = {"person", "undefined", "-", "0", "1"}
+
+        detections_found: list[dict] = []
+        for result in results:
+            if result.boxes is None:
+                continue
+            for i in range(len(result.boxes)):
+                conf = float(result.boxes.conf[i])
+                if conf < WEAPON_DETECT_CONFIDENCE:
+                    continue
+                x1, y1, x2, y2 = [int(v) for v in result.boxes.xyxy[i].tolist()]
+                cls_id = int(result.boxes.cls[i])
+                raw_label = (
+                    result.names[cls_id] if result.names and cls_id in result.names else "weapon"
+                )
+                # Skip non-weapon classes (person, undefined, etc.)
+                if raw_label.lower() in _SKIP_LABELS:
+                    continue
+                weapon_label = raw_label.upper()
+                # Normalize verbose class names to "WEAPON"
+                if len(weapon_label) > 30:
+                    weapon_label = "WEAPON"
+                detections_found.append({
+                    "weapon_type": weapon_label,
+                    "confidence": conf,
+                    "box": (x1, y1, x2, y2),
+                })
+
+        with self.state_lock:
+            self._last_weapon_boxes = detections_found
+
+        if detections_found:
+            self.weapon_flash_until = now + 0.5
+            state["weapon_alert_count"] = state.get("weapon_alert_count", 0) + len(detections_found)
+
+            # Build JPEG snapshot (max WEAPON_FRAME_SNAPSHOT_MAX_SIZE_KB)
+            snapshot: Optional[bytes] = None
+            try:
+                quality = 70
+                while quality >= 20:
+                    success, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                    if success:
+                        data = buf.tobytes()
+                        if len(data) <= WEAPON_FRAME_SNAPSHOT_MAX_SIZE_KB * 1024:
+                            snapshot = data
+                            break
+                    quality -= 15
+            except Exception:
+                snapshot = None
+
+            for det in detections_found:
+                bbox_str = ",".join(str(v) for v in det["box"])
+                self._submit_db_task(
+                    insert_weapon_event,
+                    self.camera_id,
+                    det["weapon_type"],
+                    det["confidence"],
+                    bbox_str,
+                    snapshot,
+                )
+                self._submit_db_task(
+                    log_event,
+                    self.camera_id,
+                    "weapon_detected",
+                    f"Weapon detected: {det['weapon_type']} (conf={det['confidence']:.2f})",
+                )
 
     def render_frame(self, frame):
         with self.state_lock:
@@ -2343,6 +2452,7 @@ class VideoPipeline:
             state["detector_model"] = DETECTION_MODEL_NAME
             state["plate_model"] = PLATE_MODEL_NAME
             state["device"] = "cuda" if str(self.device) != "cpu" else "cpu"
+            state["weapon_detect_enabled"] = bool(ENABLE_WEAPON_DETECT and self.weapon_detector is not None)
             state["adaptive_governor_enabled"] = status["adaptive_governor_enabled"]
             state["adaptive_mode"] = status["adaptive_mode"]
             state["adaptive_target_fps"] = status["adaptive_target_fps"]
@@ -2373,4 +2483,5 @@ class VideoPipeline:
                 except Exception as exc:
                     print(f"OSINT flush failed: {exc}")
 
+        self._run_weapon_inference(frame, state)
         return self._draw_scene(frame)

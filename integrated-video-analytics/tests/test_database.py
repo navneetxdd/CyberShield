@@ -162,3 +162,102 @@ def test_face_and_vehicle_filters(tmp_path):
         assert plated_only[0]["plate_text"] == "MH12AB1234"
     finally:
         database.DB_PATH = original_path
+
+
+# ---------------------------------------------------------------------------
+# Weapon events
+# ---------------------------------------------------------------------------
+
+def test_insert_weapon_event_persists(tmp_path):
+    db_path = tmp_path / "weapon_db.db"
+    original_path = database.DB_PATH
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.insert_weapon_event("cam_w", "PISTOL", 0.90, "10,20,100,150", None)
+        events = database.get_weapon_events()
+
+        assert len(events) == 1
+        assert events[0]["camera_id"] == "cam_w"
+        assert events[0]["weapon_type"] == "PISTOL"
+        assert abs(events[0]["confidence"] - 0.90) < 0.001
+        assert events[0]["bounding_box"] == "10,20,100,150"
+        assert events[0]["acknowledged"] == 0
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_get_weapon_events_filter_unacknowledged(tmp_path):
+    db_path = tmp_path / "weapon_ack.db"
+    original_path = database.DB_PATH
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.insert_weapon_event("cam_w", "PISTOL", 0.88, None, None)
+        database.insert_weapon_event("cam_w", "RIFLE", 0.76, None, None)
+
+        all_events = database.get_weapon_events(camera_id="cam_w")
+        assert len(all_events) == 2
+
+        # Acknowledge the first one
+        database.acknowledge_weapon_event(all_events[0]["id"])
+
+        unacked = database.get_weapon_events(camera_id="cam_w", unacknowledged_only=True)
+        assert len(unacked) == 1
+        assert unacked[0]["acknowledged"] == 0
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_acknowledge_weapon_event(tmp_path):
+    db_path = tmp_path / "weapon_ack2.db"
+    original_path = database.DB_PATH
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.insert_weapon_event("cam_w", "KNIFE", 0.72, None, None)
+        events = database.get_weapon_events()
+        event_id = events[0]["id"]
+
+        # Initially unacknowledged
+        assert events[0]["acknowledged"] == 0
+        assert events[0]["acknowledged_at"] is None
+
+        result = database.acknowledge_weapon_event(event_id)
+        assert result is True
+
+        updated = database.get_weapon_events()
+        assert updated[0]["acknowledged"] == 1
+        assert updated[0]["acknowledged_at"] is not None
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_get_weapon_summary_counts(tmp_path):
+    db_path = tmp_path / "weapon_summary.db"
+    original_path = database.DB_PATH
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.insert_weapon_event("cam_a", "PISTOL", 0.91, None, None)
+        database.insert_weapon_event("cam_a", "PISTOL", 0.85, None, None)
+        database.insert_weapon_event("cam_b", "RIFLE", 0.78, None, None)
+
+        # Acknowledge one PISTOL
+        events = database.get_weapon_events(camera_id="cam_a")
+        database.acknowledge_weapon_event(events[0]["id"])
+
+        summary_a = database.get_weapon_summary(camera_id="cam_a")
+        assert summary_a["total_weapon_events"] == 2
+        assert summary_a["unacknowledged_count"] == 1
+        assert summary_a["weapon_breakdown"]["PISTOL"] == 2
+
+        summary_all = database.get_weapon_summary()
+        assert summary_all["total_weapon_events"] == 3
+        assert "RIFLE" in summary_all["weapon_breakdown"]
+    finally:
+        database.DB_PATH = original_path
