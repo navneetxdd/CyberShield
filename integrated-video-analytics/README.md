@@ -1,6 +1,31 @@
-# CyberShield - Integrated Video Analytics
+# CyberShield — Integrated Video Analytics
 
-CyberShield is a unified AI video analytics platform for vehicle intelligence, ANPR, facial recognition, people counting, gender analytics, searchable records, live reporting, and watchlist-based alerting through a single FastAPI dashboard.
+Full documentation, setup instructions, system architecture, and API reference are maintained in the [root README](../README.md).
+
+## Quick start (from repo root)
+
+```bash
+python run.py
+```
+
+Open **http://localhost:8080**.
+
+## Manual start (from this directory)
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py
+```
+
+## Run tests
+
+```bash
+.venv\Scripts\activate
+python -m pytest tests/ -v
+```
+
 
 ## Core modules
 
