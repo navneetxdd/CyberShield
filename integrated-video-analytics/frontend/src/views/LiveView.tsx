@@ -120,6 +120,16 @@ function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLau
       if (!res.ok) throw new Error(await res.text());
 
       setStatus("done");
+      // Schedule cameras-updated events timed to each camera's delay so the
+      // UI sidebar shows each camera as it mounts on the backend.
+      const fired = new Set<number>();
+      payload.forEach(({ delay_seconds }) => {
+        const ms = (delay_seconds + 2) * 1000; // +2s buffer after server mount
+        if (!fired.has(ms)) {
+          fired.add(ms);
+          setTimeout(() => window.dispatchEvent(new CustomEvent("cameras-updated")), ms);
+        }
+      });
       setTimeout(() => { onLaunched(); onClose(); }, 1800);
     } catch (e: any) {
       setError(e?.message || "Launch failed");
