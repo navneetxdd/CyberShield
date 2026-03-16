@@ -102,10 +102,13 @@ class VehicleClassifier:
     def _load_model(self) -> Any:
         try:
             from transformers import pipeline  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise RuntimeError(
-                "transformers is required for Stanford Cars classification. Install with: pip install transformers"
-            ) from exc
+        except ImportError:
+            import logging
+            logging.getLogger("osint_reid.vehicle_classifier").warning(
+                "transformers not installed — vehicle make/model classification disabled. "
+                "Install with: pip install transformers"
+            )
+            return None
 
         model = pipeline(
             task="image-classification",
@@ -164,7 +167,7 @@ class VehicleClassifier:
         return (tensor - mean) / std
 
     def classify_vehicle_crops(self, crops: list[np.ndarray]) -> tuple[str, float]:
-        if not crops:
+        if not crops or self.model is None:
             return ("Unknown", 0.0)
 
         images: list[Image.Image] = []

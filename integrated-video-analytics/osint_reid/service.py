@@ -170,9 +170,15 @@ class OSINTService:
             make_model = "Unknown"
             make_model_conf = 0.0
 
+            # Compute colour histogram for ALL tracklets (vehicles and persons).
+            # For persons this provides the only appearance signal when face/ReID
+            # embeddings are unavailable, enabling colour-based cross-camera linking.
+            if buf.crops:
+                _, _, color_hist = self.vehicle_classifier.classify_color(buf.crops)
+
             if buf.class_name != "person":
                 make_model, make_model_conf = self.vehicle_classifier.classify_vehicle_crops(buf.crops)
-                color_name, color_conf, color_hist = self.vehicle_classifier.classify_color(buf.crops)
+                color_name, color_conf, _ = self.vehicle_classifier.classify_color(buf.crops)
                 self.db.upsert_vehicle(
                     tracklet_id=buf.tracklet_id,
                     camera_id=buf.camera_id,

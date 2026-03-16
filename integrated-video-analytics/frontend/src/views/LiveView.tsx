@@ -59,13 +59,14 @@ function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLau
     updateEntry(i, { file: f, stagedPath: "", uploadDone: false, uploadProgress: 0, uploadError: "" });
   };
 
-  const stageFile = (entry: DemoEntry, i: number): Promise<string> =>
+  // Upload a single file via the existing /api/video/upload endpoint and mount it immediately.
+  const uploadFile = (entry: DemoEntry, i: number): Promise<void> =>
     new Promise((resolve, reject) => {
       const formData = new FormData();
       formData.append("file", entry.file!);
       formData.append("camera_id", entry.camera_id);
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `${CONFIG.API_URL}/api/video/stage`);
+      xhr.open("POST", `${CONFIG.API_URL}/api/video/upload`);
       xhr.setRequestHeader("X-API-Key", CONFIG.API_KEY);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -75,11 +76,12 @@ function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLau
       xhr.onload = () => {
         try {
           const data = JSON.parse(xhr.responseText);
-          if (data?.status === "success" && data.path) {
-            updateEntry(i, { uploadDone: true, uploadProgress: 100, stagedPath: data.path });
-            resolve(data.path);
+          if (data?.status === "success") {
+            updateEntry(i, { uploadDone: true, uploadProgress: 100 });
+            window.dispatchEvent(new CustomEvent("cameras-updated"));
+            resolve();
           } else {
-            const msg = data?.detail || "Upload failed";
+            const msg = data?.detail || data?.message || "Upload failed";
             updateEntry(i, { uploadError: msg });
             reject(new Error(msg));
           }
@@ -102,37 +104,24 @@ function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLau
     setStatus("uploading");
 
     try {
-      // Stage all files in parallel
-      const paths = await Promise.all(
-        entries.map((e, i) => e.file ? stageFile(e, i) : Promise.resolve(""))
-      );
+      // Upload the first camera immediately (no delay) so it mounts before dialog closes.
+      const minDelay = Math.min(...active.map(e => Number(e.delay_seconds)));
+      const firstEntry = active.find(e => Number(e.delay_seconds) === minDelay)!;
+      const firstIdx = entries.indexOf(firstEntry);
+      await uploadFile(firstEntry, firstIdx);
 
-      setStatus("launching");
-      const payload = entries
-        .map((e, i) => ({ camera_id: e.camera_id, source: paths[i], delay_seconds: Number(e.delay_seconds) }))
-        .filter(e => e.source);
+      // Close the dialog now — remaining cameras upload in the background.
+      onLaunched();
+      onClose();
 
-      const res = await fetch(`${CONFIG.API_URL}/api/demo/sequence`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": CONFIG.API_KEY },
-        body: JSON.stringify(payload),
+      // Fire-and-forget: upload remaining entries at their relative delays.
+      entries.forEach((entry, i) => {
+        if (!entry.file || entry === firstEntry) return;
+        const delayMs = (Number(entry.delay_seconds) - minDelay) * 1000;
+        setTimeout(() => uploadFile(entry, i).catch(() => {}), delayMs);
       });
-      if (!res.ok) throw new Error(await res.text());
-
-      setStatus("done");
-      // Schedule cameras-updated events timed to each camera's delay so the
-      // UI sidebar shows each camera as it mounts on the backend.
-      const fired = new Set<number>();
-      payload.forEach(({ delay_seconds }) => {
-        const ms = (delay_seconds + 2) * 1000; // +2s buffer after server mount
-        if (!fired.has(ms)) {
-          fired.add(ms);
-          setTimeout(() => window.dispatchEvent(new CustomEvent("cameras-updated")), ms);
-        }
-      });
-      setTimeout(() => { onLaunched(); onClose(); }, 1800);
     } catch (e: any) {
-      setError(e?.message || "Launch failed");
+      setError(e?.message || "Upload failed");
       setStatus("idle");
     }
   };
@@ -229,8 +218,7 @@ function DemoSequenceModal({ onClose, onLaunched }: { onClose: () => void; onLau
 
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
           <div className="text-[9px] font-mono text-muted-foreground">
-            {status === "uploading" && "Uploading files…"}
-            {status === "launching" && "Launching sequence…"}
+            {status === "uploading" && "Uploading & mounting cameras…"}
             {status === "done" && "✓ Sequence launched!"}
           </div>
           <button

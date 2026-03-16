@@ -63,16 +63,21 @@ class ReIDWorker:
     def _load_face_model(self) -> Any:
         try:
             from insightface.app import FaceAnalysis
-        except ImportError as exc:
-            raise RuntimeError(
-                "insightface is required for face embeddings. Install with: pip install insightface onnxruntime"
-            ) from exc
-
-        model = FaceAnalysis(name="buffalo_l")
-        ctx_id = 0 if self.device.type == "cuda" else -1
-        model.prepare(ctx_id=ctx_id, det_size=(640, 640))
-        logger.info("Loaded InsightFace buffalo_l", extra={"stage": "face_model", "ctx_id": ctx_id})
-        return model
+        except ImportError:
+            logger.warning(
+                "insightface not installed — face embeddings disabled. "
+                "Install with: pip install insightface onnxruntime"
+            )
+            return None
+        try:
+            model = FaceAnalysis(name="buffalo_l")
+            ctx_id = 0 if self.device.type == "cuda" else -1
+            model.prepare(ctx_id=ctx_id, det_size=(640, 640))
+            logger.info("Loaded InsightFace buffalo_l", extra={"stage": "face_model", "ctx_id": ctx_id})
+            return model
+        except Exception as exc:
+            logger.warning("Failed to load InsightFace (%s) — face embeddings disabled.", exc)
+            return None
 
     def compute_reid_embeddings(self, tracklet_frames: list[np.ndarray]) -> np.ndarray:
         if not tracklet_frames or self.reid_model is None:
@@ -89,7 +94,7 @@ class ReIDWorker:
         return np.concatenate(outputs, axis=0)
 
     def compute_face_embeddings(self, face_frames: list[np.ndarray]) -> np.ndarray:
-        if not face_frames:
+        if not face_frames or self.face_model is None:
             return np.empty((0, 512), dtype=np.float32)
 
         embs: list[np.ndarray] = []

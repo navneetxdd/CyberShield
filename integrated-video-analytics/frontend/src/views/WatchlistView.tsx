@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Users, AlertTriangle } from "lucide-react";
+import { Users, AlertTriangle, Shield, Camera, RefreshCw } from "lucide-react";
 import { CyberShieldState } from "../pages/Index";
 import { CrowdDensityGauge } from "../components/CrowdDensityGauge";
 import { apiFetch } from "../lib/api";
@@ -11,6 +11,15 @@ interface WatchlistViewProps {
 
 interface Subject { name: string; enrolled_at?: string; }
 interface WatchlistEntry { identity: string; updated_at?: number; }
+interface TrackedPerson {
+  global_id: string;
+  display_name: string;
+  watchlist_flag: number;
+  watchlist_meta: Record<string, any>;
+  last_seen_ts: string;
+  last_seen_camera: string;
+  cameras_visited: number;
+}
 
 export function WatchlistView({ state, activeCamera }: WatchlistViewProps) {
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -20,6 +29,28 @@ export function WatchlistView({ state, activeCamera }: WatchlistViewProps) {
   const [enrollName, setEnrollName] = useState("");
   const [enrollFile, setEnrollFile] = useState<File | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const [trackedPersons, setTrackedPersons] = useState<TrackedPerson[]>([]);
+  const [trackedLoading, setTrackedLoading] = useState(false);
+
+  const loadTrackedPersons = async () => {
+    setTrackedLoading(true);
+    try {
+      const data = await apiFetch<{ persons: TrackedPerson[] }>("/api/persons?watchlist_only=true");
+      setTrackedPersons(data?.persons || []);
+    } catch { setTrackedPersons([]); }
+    setTrackedLoading(false);
+  };
+
+  const removeFromTrackedWatchlist = async (globalId: string) => {
+    try {
+      await apiFetch(`/api/persons/${globalId}/watchlist`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flag: false }),
+      });
+      setTrackedPersons(p => p.filter(x => x.global_id !== globalId));
+    } catch { /* ignore */ }
+  };
 
   const recentlyDetected = (name: string) => {
     return state.event_logs?.some(e => e.detail?.includes(name) && e.type?.includes("Watchlist"));
@@ -38,7 +69,13 @@ export function WatchlistView({ state, activeCamera }: WatchlistViewProps) {
     setLoading(false);
   };
 
-  useEffect(() => { loadSubjects(); }, []);
+  useEffect(() => { loadSubjects(); loadTrackedPersons(); }, []);
+
+  // Refresh tracked persons every 5s so newly watchlisted persons appear automatically
+  useEffect(() => {
+    const iv = setInterval(loadTrackedPersons, 5000);
+    return () => clearInterval(iv);
+  }, []);
 
   const handleEnroll = async () => {
     if (!enrollFile || !enrollName.trim()) return;
@@ -150,6 +187,45 @@ export function WatchlistView({ state, activeCamera }: WatchlistViewProps) {
           )}
         </div>
       </div>
+
+      {/* TRACKED PERSONS WATCHLIST (cross-camera flagged) */}
+      {trackedPersons.length > 0 && (
+        <div className="border-t border-border shrink-0 px-3 py-2 max-h-56 overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[9px] font-mono text-yellow-400 uppercase tracking-widest flex items-center gap-1">
+              <Shield size={10} /> FLAGGED TRACKED PERSONS ({trackedPersons.length})
+            </span>
+            <button onClick={loadTrackedPersons} disabled={trackedLoading} className="text-muted-foreground hover:text-foreground">
+              <RefreshCw size={10} className={trackedLoading ? "animate-spin" : ""} />
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {trackedPersons.map(p => (
+              <div key={p.global_id} className="border border-yellow-500/30 bg-yellow-500/5 p-2 flex items-center gap-3">
+                <img
+                  src={`/api/persons/${p.global_id}/snapshot.jpg`}
+                  alt=""
+                  className="w-10 h-10 object-cover border border-yellow-500/40 shrink-0"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-mono text-yellow-400 truncate">
+                    {p.display_name || p.watchlist_meta?.display_name || p.global_id}
+                  </div>
+                  <div className="text-[9px] font-mono text-muted-foreground flex items-center gap-1 mt-0.5">
+                    <Camera size={8} /> {p.last_seen_camera || "—"} · {p.last_seen_ts?.slice(0, 19) || "—"}
+                  </div>
+                </div>
+                <button
+                  onClick={() => removeFromTrackedWatchlist(p.global_id)}
+                  className="text-[8px] font-mono text-status-alert/70 hover:text-status-alert border border-status-alert/30 px-2 py-0.5 shrink-0">
+                  REMOVE
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* RIGHT: Live FRS Feed (40%) */}
       <div className="flex-[2] flex flex-col overflow-hidden">

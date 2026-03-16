@@ -368,7 +368,7 @@ class OSINTDB:
         conn = self._connect()
         try:
             q = """
-                SELECT g.global_id, g.display_name, g.watchlist_flag, g.watchlist_meta,
+                SELECT g.global_id, g.watchlist_flag, g.watchlist_meta,
                        g.last_seen_ts, g.last_seen_camera,
                        COUNT(DISTINCT t.camera_id) AS cameras_visited,
                        COUNT(t.tracklet_id) AS tracklet_count
@@ -382,7 +382,9 @@ class OSINTDB:
             out: list[dict[str, Any]] = []
             for row in rows:
                 item = dict(row)
-                item["watchlist_meta"] = json.loads(item.get("watchlist_meta") or "{}")
+                meta = json.loads(item.get("watchlist_meta") or "{}")
+                item["watchlist_meta"] = meta
+                item["display_name"] = meta.get("display_name", "")
                 out.append(item)
             return out
         finally:
@@ -394,10 +396,10 @@ class OSINTDB:
             conn.execute(
                 """
                 UPDATE global_identities
-                SET watchlist_flag=?, watchlist_meta=?, last_updated=?
+                SET watchlist_flag=?, watchlist_meta=?
                 WHERE global_id=?
                 """,
-                (int(flag), json.dumps(meta or {}), now_utc_iso(), global_id),
+                (int(flag), json.dumps(meta or {}), global_id),
             )
             conn.commit()
         finally:
@@ -408,7 +410,7 @@ class OSINTDB:
         try:
             row = conn.execute(
                 """
-                SELECT tracklet_id, camera_id, start_ts, end_ts
+                SELECT tracklet_id, camera_id, start_ts, end_ts, color_histogram
                 FROM tracklets
                 WHERE resolved_global_id=?
                 ORDER BY end_ts DESC
