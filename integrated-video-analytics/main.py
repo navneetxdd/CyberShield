@@ -36,6 +36,7 @@ from database import (
     get_vehicle_records,
 )
 from pipeline import (
+    ANPR_MODE,
     DETECTION_CONFIDENCE,
     FACE_MATCH_THRESHOLD,
     PLATE_CONFIDENCE,
@@ -448,6 +449,7 @@ def get_initial_state(camera_id: str, source: str = "") -> dict:
         "runtime_warnings": [],
         "detector_model": None,
         "plate_model": None,
+        "anpr_mode": ANPR_MODE,
         "device": "cpu",
         "stream_profile": "balanced",
         "system_health": get_ui_system_health_snapshot(),

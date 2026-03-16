@@ -21,6 +21,7 @@ CyberShield is a production-grade AI video analytics platform that turns any IP 
 13. [Directory Structure](#directory-structure)
 14. [Running Tests](#running-tests)
 15. [Database](#database)
+16. [Latest Session Update (Mar 2026)](#latest-session-update-mar-2026)
 
 ---
 
@@ -218,6 +219,47 @@ The server binds to `0.0.0.0:8080` by default.
 
 ---
 
+## Latest Session Update (Mar 2026)
+
+The following implementation changes were completed in this development session.
+
+### Frontend integration and serving
+- Replaced the legacy template-first UI path with an integrated React + Vite frontend under `integrated-video-analytics/frontend`.
+- Added production build output to `integrated-video-analytics/static_ui` and configured FastAPI to serve it at root.
+- Added SPA fallback behavior so direct frontend routes resolve to `static_ui/index.html`.
+- Kept resilient fallback to legacy `templates/index.html` if the React bundle is not available.
+- Mounted `/assets` static path for React build artifacts.
+- Added Vite dev proxy for `/api` and `/ws` to backend port `8080`.
+
+### Frontend API and real-data wiring
+- Added shared frontend runtime config (`src/lib/config.ts`) for API/WS URL resolution.
+- Added shared frontend fetch/upload utilities (`src/lib/api.ts`) with optional API key header injection.
+- Added `cn` utility (`src/lib/utils.ts`) for class merging used by UI components.
+- Removed demo/mock execution paths from major views/components and wired calls to real backend APIs.
+- Added and aligned missing UI dependencies (Radix, shadcn-related packages, and utility libs) to satisfy TypeScript and runtime imports.
+
+### Backend API and runtime updates
+- Added CORS dev origins for React dev server (`http://localhost:5173`, `http://127.0.0.1:5173`).
+- Added `/api/analytics/summary` endpoint used by session summary UI.
+- Added `/api/settings/face-threshold` GET/POST runtime setting endpoint.
+- Added `/api/system/stats` endpoint exposing CPU/RAM and optional NVML GPU telemetry.
+- Added local `.env` loader in `main.py` so `.env` values are applied without external dotenv dependency.
+
+### OCR, ReID, and classifier hardening
+- Hardened ReID worker behavior when `torchreid` is unavailable by degrading gracefully instead of hard failure.
+- Expanded OCR preprocessing variants, widened candidate windows, and improved Paddle result parsing robustness.
+- Added low-confidence ANPR event logging visibility and rider-proxy people counting for unmatched motorcycles.
+- Updated vehicle make/model classification pipeline to Stanford Cars transformer pipeline and improved color heuristics.
+
+### Build and validation
+- Frontend production builds pass for both integrated frontend and reference UI copy after dependency/type fixes.
+- Backend test suite was run repeatedly during session and passed in configured virtual environment.
+
+### Additional documentation
+- See `context.md` at repository root for a complete, highly detailed implementation log, validation history, commands executed, and inventory of all modified/new artifacts.
+
+---
+
 ## Running the Server
 
 ### First Run
@@ -236,7 +278,7 @@ Subsequent starts are fast — all assets are cached locally.
 
 ### Upload a video
 
-Use the **Upload** button on the dashboard or `POST /api/upload` to add a video file. Once uploaded the stream starts automatically and appears in the camera list.
+Use the **Upload** button on the dashboard or `POST /api/video/upload` to add a video file. Once uploaded the stream starts automatically and appears in the camera list.
 
 ---
 
@@ -252,7 +294,7 @@ All configuration is via environment variables. None are required — the system
 | `CYBERSHIELD_PLATE_MODEL` | HuggingFace URL | Override the plate detector path or URL |
 | `CYBERSHIELD_DETECT_IMGSZ` | `896` | Detector inference image size |
 | `CYBERSHIELD_MAX_UPLOAD_SIZE` | `512MB` | Maximum upload file size (e.g. `1GB`) |
-| `CYBERSHIELD_ALLOWED_ORIGINS` | `*` | Comma-separated CORS allowed origins |
+| `CYBERSHIELD_ALLOWED_ORIGINS` | localhost dev origins | Comma-separated CORS allowed origins |
 
 ### ANPR / OCR
 

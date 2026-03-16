@@ -338,6 +338,11 @@ PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 30
 PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.72, minimum=0.1, maximum=0.99)
 LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.32, minimum=0.05, maximum=0.95)
 CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE", 0.78, minimum=0.05, maximum=0.99)
+ANPR_MODE = (os.getenv("CYBERSHIELD_ANPR_MODE") or "cloud_primary").strip().lower()
+if ANPR_MODE not in {"cloud_primary", "local_first", "cloud_only"}:
+    ANPR_MODE = "cloud_primary"
+CLOUD_OCR_REGION = (os.getenv("CYBERSHIELD_CLOUD_OCR_REGION") or "").strip().lower()
+CLOUD_OCR_MAX_CANDIDATES = read_env_int("CYBERSHIELD_CLOUD_OCR_MAX_CANDIDATES", 3, minimum=1, maximum=8)
 ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
 ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
 FACE_MATCH_THRESHOLD = read_env_float("CYBERSHIELD_FACE_MATCH_THRESHOLD", 0.95, minimum=0.5, maximum=1.3)
@@ -1430,78 +1435,141 @@ class VideoPipeline:
         if time.time() < self._plate_api_disabled_until:
             return None
 
-        ok, img_encoded = cv2.imencode('.jpg', vehicle_crop)
-        if not ok:
-            return None
+        def encode_region(region: Any) -> Optional[bytes]:
+            ok, encoded = cv2.imencode(".jpg", region)
+            if not ok:
+                return None
+            return encoded.tobytes()
 
-        for attempt in range(3):
-            try:
-                response = requests.post(
-                    'https://api.platerecognizer.com/v1/plate-reader/',
-                    headers={'Authorization': f'Token {PLATE_RECOGNIZER_API_TOKEN}'},
-                    files={'upload': ('image.jpg', img_encoded.tobytes(), 'image/jpeg')},
-                    data={'features': 'mmc', 'regions': 'in'},
-                    timeout=15,
-                )
-                if response.status_code == 429:
-                    self._plate_api_disabled_until = time.time() + PLATE_API_COOLDOWN_SECONDS
-                    print(
-                        "Plate Recognizer quota or rate limit reached; disabling cloud OCR "
-                        f"for {PLATE_API_COOLDOWN_SECONDS:.0f}s and falling back to local OCR."
-                    )
-                    return None
-                response.raise_for_status()
-                break
-            except requests.RequestException as exc:
-                print(f"Plate Recognizer API Error: {exc}")
-                if attempt == 2:
-                    self._plate_api_disabled_until = time.time() + min(PLATE_API_COOLDOWN_SECONDS, 60.0)
-                    return None
-                time.sleep(2 ** attempt)
-        else:
-            return None
+        def normalize_cloud_plate_text(raw_text: Any) -> Optional[str]:
+            # Cloud ANPR results are already structured; keep normalization permissive.
+            cleaned = "".join(ch for ch in str(raw_text or "").upper() if ch.isalnum())
+            if len(cleaned) < 4 or len(cleaned) > 12:
+                return None
+            return cleaned
 
-        data = response.json()
-        if not data.get('results'):
-            return None
-
-        result = data['results'][0]
-        plate_text = normalize_plate_text(result.get('plate', ''))
-        if not plate_text:
-            return None
-        cloud_confidence = float(result.get('score', 0.0) or 0.0)
-        if cloud_confidence < CLOUD_OCR_MIN_CONFIDENCE:
-            return None
-
-        vehicle_props = result.get('vehicle', {}).get('props', {})
-
-        def pick_attribute(key, fallback_key=None):
+        def pick_attribute(result: Dict[str, Any], key: str, fallback_key: Optional[str] = None) -> str:
+            vehicle_props = result.get("vehicle", {}).get("props", {})
             val = result.get(key)
             if not val and fallback_key:
                 val = result.get(fallback_key)
             if not val:
                 val = vehicle_props.get(key)
             if isinstance(val, list) and len(val) > 0:
-                return val[0].get('name', 'Unknown')
+                return str(val[0].get("name", "Unknown") or "Unknown")
             if isinstance(val, str) and val.strip():
                 return val
-            return 'Unknown'
+            return "Unknown"
 
-        make = pick_attribute('make')
-        model = pick_attribute('make_model', fallback_key='model')
-        color = pick_attribute('color')
-        if model != 'Unknown' and make != 'Unknown' and model.lower().startswith(make.lower()):
-            model = model[len(make):].strip() or model
+        def extract_from_region(region: Any) -> Optional[Dict[str, Any]]:
+            payload = encode_region(region)
+            if not payload:
+                return None
 
-        return {
-            "text": plate_text,
-            "confidence": cloud_confidence,
-            "make": make.capitalize(),
-            "model": model.capitalize() if model != "Unknown" else "",
-            "color": color.capitalize() if color != "Unknown" else "",
-            "plate_crop": self._best_plate_crop_from_vehicle(vehicle_crop),
-            "source": "cloud",
-        }
+            data = {"features": "mmc"}
+            if CLOUD_OCR_REGION:
+                data["regions"] = CLOUD_OCR_REGION
+
+            for attempt in range(3):
+                try:
+                    response = requests.post(
+                        "https://api.platerecognizer.com/v1/plate-reader/",
+                        headers={"Authorization": f"Token {PLATE_RECOGNIZER_API_TOKEN}"},
+                        files={"upload": ("image.jpg", payload, "image/jpeg")},
+                        data=data,
+                        timeout=15,
+                    )
+                    if response.status_code == 429:
+                        self._plate_api_disabled_until = time.time() + PLATE_API_COOLDOWN_SECONDS
+                        print(
+                            "Plate Recognizer quota or rate limit reached; disabling cloud OCR "
+                            f"for {PLATE_API_COOLDOWN_SECONDS:.0f}s and falling back to local OCR."
+                        )
+                        return None
+                    response.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    print(f"Plate Recognizer API Error: {exc}")
+                    if attempt == 2:
+                        self._plate_api_disabled_until = time.time() + min(PLATE_API_COOLDOWN_SECONDS, 60.0)
+                        return None
+                    time.sleep(2 ** attempt)
+            else:
+                return None
+
+            body = response.json()
+            results = body.get("results") or []
+            if not results:
+                return None
+
+            def result_rank(item: Dict[str, Any]) -> tuple[float, float]:
+                return (
+                    float(item.get("score", 0.0) or 0.0),
+                    float(item.get("dscore", 0.0) or 0.0),
+                )
+
+            best = max(results, key=result_rank)
+            cloud_confidence = float(best.get("score", 0.0) or 0.0)
+            if cloud_confidence < CLOUD_OCR_MIN_CONFIDENCE:
+                return None
+
+            plate_text = normalize_cloud_plate_text(best.get("plate", ""))
+            if not plate_text:
+                return None
+
+            make = pick_attribute(best, "make")
+            model = pick_attribute(best, "make_model", fallback_key="model")
+            color = pick_attribute(best, "color")
+            if model != "Unknown" and make != "Unknown" and model.lower().startswith(make.lower()):
+                model = model[len(make):].strip() or model
+
+            return {
+                "text": plate_text,
+                "confidence": cloud_confidence,
+                "make": make.capitalize(),
+                "model": model.capitalize() if model != "Unknown" else "",
+                "color": color.capitalize() if color != "Unknown" else "",
+                "plate_crop": region,
+                "source": "cloud",
+            }
+
+        if not hasattr(vehicle_crop, "shape"):
+            return extract_from_region(vehicle_crop)
+
+        regions: list[Any] = []
+        seen_shapes: set[tuple[int, int]] = set()
+        for region, _ in self._candidate_plate_regions(vehicle_crop)[:CLOUD_OCR_MAX_CANDIDATES]:
+            if region is None or getattr(region, "size", 0) == 0:
+                continue
+            shape_key = tuple(region.shape[:2])
+            if shape_key in seen_shapes:
+                continue
+            regions.append(region)
+            seen_shapes.add(shape_key)
+
+        best_crop = self._best_plate_crop_from_vehicle(vehicle_crop)
+        if best_crop is not None and getattr(best_crop, "size", 0) > 0:
+            shape_key = tuple(best_crop.shape[:2])
+            if shape_key not in seen_shapes:
+                regions.append(best_crop)
+                seen_shapes.add(shape_key)
+
+        full_shape = tuple(vehicle_crop.shape[:2])
+        if full_shape not in seen_shapes:
+            regions.append(vehicle_crop)
+
+        best_result: Optional[Dict[str, Any]] = None
+        for region in regions:
+            candidate = extract_from_region(region)
+            if not candidate:
+                continue
+            if best_result is None or float(candidate.get("confidence") or 0.0) > float(best_result.get("confidence") or 0.0):
+                best_result = candidate
+            # Early stop once we have a very strong cloud read.
+            if float(candidate.get("confidence") or 0.0) >= 0.92:
+                return candidate
+
+        return best_result
 
     def _extract_plate_local(self, vehicle_crop) -> Optional[Dict[str, Any]]:
         if vehicle_crop.size == 0 or self.ocr_reader is None:
@@ -1549,41 +1617,33 @@ class VideoPipeline:
         return secondary if float(secondary.get("confidence") or 0.0) > float(primary.get("confidence") or 0.0) else primary
 
     def _extract_plate_and_mmc(self, vehicle_crop) -> Optional[Dict[str, Any]]:
-        """
-        Primary ANPR path.
+        local_result: Optional[Dict[str, Any]] = None
 
-        Preference order (when cloud API is available):
-        1. Plate Recognizer cloud result above CLOUD_OCR_MIN_CONFIDENCE
-        2. Merged Paddle + EasyOCR local result
-        3. Paddle-only
-        4. EasyOCR-only
-        5. Cloud result below threshold (last-resort fallback)
-        """
-        cloud_result = self._extract_plate_cloud(vehicle_crop)
-        cloud_conf = float((cloud_result or {}).get("confidence") or 0.0)
-        if cloud_result and cloud_conf >= CLOUD_OCR_MIN_CONFIDENCE:
-            return cloud_result
+        if ANPR_MODE in {"cloud_primary", "cloud_only"}:
+            cloud_result = self._extract_plate_cloud(vehicle_crop)
+            if cloud_result:
+                return cloud_result
+            if ANPR_MODE == "cloud_only":
+                return None
 
         paddle_result = self._extract_plate_paddle(vehicle_crop)
         easy_result = self._extract_plate_local(vehicle_crop)
 
         if paddle_result and easy_result:
-            merged = self._merge_plate_results(paddle_result, easy_result)
-            if float(merged.get("confidence") or 0.0) >= PADDLE_PRIMARY_MIN_CONFIDENCE:
-                return merged
-            return merged
+            local_result = self._merge_plate_results(paddle_result, easy_result)
+        elif paddle_result:
+            local_result = paddle_result
+        elif easy_result:
+            local_result = easy_result
 
-        if paddle_result:
-            return paddle_result
+        if ANPR_MODE == "local_first":
+            if local_result:
+                return local_result
+            return self._extract_plate_cloud(vehicle_crop)
 
-        if easy_result:
-            return easy_result
-
-        # If we had a weak cloud result but no usable local result, fall back to it.
-        if cloud_result:
-            return cloud_result
-
-        return None
+        if local_result:
+            return local_result
+        return self._extract_plate_cloud(vehicle_crop)
 
     @staticmethod
     def _strip_json_fence(raw_text: str) -> str:
@@ -1792,6 +1852,7 @@ class VideoPipeline:
                 }
             )
         return {
+            "anpr_mode": ANPR_MODE,
             "plate_detector_ready": self.plate_detector is not None,
             "paddle_ocr_ready": paddle_ready,
             "easyocr_ready": easy_ready,
