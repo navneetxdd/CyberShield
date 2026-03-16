@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar, ViewType } from "@/components/layout/Sidebar";
 import { LiveView } from "@/views/LiveView";
@@ -28,6 +28,7 @@ export interface CyberShieldState {
   vehicle_current_types?: Record<string, number>;
   gender_stats: Record<string, number>;
   recent_plates: any[];
+  pending_plates?: any[];
   recent_faces: any[];
   recent_vehicles: any[];
   event_logs: any[];
@@ -35,18 +36,22 @@ export interface CyberShieldState {
   zone_count?: number;
   plate_detector_ready?: boolean;
   device?: string;
+  stream_profile?: "low" | "balanced" | "high";
+  detection_confidence?: number;
+  plate_confidence?: number;
+  face_match_threshold?: number;
   faces_detected?: number;
   plates_detected?: number;
   people_total_count?: number;
 }
 
-const defaultState: CyberShieldState = {
+  const defaultState: CyberShieldState = {
   vehicle_count: 0, people_count: 0, stream_fps: 0,
   inference_latency_ms: 0, crowd_density: "Low",
   is_processing: false,
   vehicle_types: { car: 0, motorcycle: 0, bus: 0, truck: 0 },
   gender_stats: { Man: 0, Woman: 0, Unknown: 0 },
-  recent_plates: [], recent_faces: [], recent_vehicles: [], event_logs: [],
+  recent_plates: [], pending_plates: [], recent_faces: [], recent_vehicles: [], event_logs: [],
 };
 
 const Index = () => {
@@ -79,7 +84,7 @@ const Index = () => {
     return () => window.removeEventListener("cameras-updated", h);
   }, [fetchCameras]);
 
-  const { data: wsData, connected } = useBackendStream(activeCamera);
+  const { data: wsData } = useBackendStream(activeCamera);
   useEffect(() => { if (wsData) setState(p => ({ ...p, ...wsData })); }, [wsData]);
 
   // Collect watchlist alert events for the counter
@@ -147,7 +152,6 @@ const Index = () => {
         gpu_mem: state.system_health.gpu_mem,
         cpu_temp: state.system_health.cpu_temp,
         gpu_temp: state.system_health.gpu_temp,
-        throughput: state.system_health.throughput,
       }
     : undefined;
 
@@ -205,7 +209,7 @@ const Index = () => {
         )}
         {activeView === "analytics" && (
           <div className="h-full overflow-auto">
-            <Analytics />
+            <Analytics cameraId={activeCamera} />
           </div>
         )}
         {activeView === "watchlist" && (

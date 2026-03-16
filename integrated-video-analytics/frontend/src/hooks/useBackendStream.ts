@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { CONFIG } from '../lib/config';
+import { getConfig } from '../lib/config';
 
 export function useBackendStream(cameraId: string) {
   const [data, setData] = useState<any>(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [configVersion, setConfigVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
 
   const connect = useCallback(() => {
+    const config = getConfig();
     if (!cameraId) {
       setConnected(false);
       setError(null);
@@ -16,7 +18,7 @@ export function useBackendStream(cameraId: string) {
     }
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = `${CONFIG.WS_URL}/ws/analytics/${cameraId}?api_key=${CONFIG.API_KEY}`;
+    const wsUrl = `${config.WS_URL}/ws/analytics/${cameraId}?api_key=${encodeURIComponent(config.API_KEY || "")}`;
     const ws = new WebSocket(wsUrl);
 
     ws.onopen = () => {
@@ -45,7 +47,13 @@ export function useBackendStream(cameraId: string) {
     };
 
     wsRef.current = ws;
-  }, [cameraId]);
+  }, [cameraId, configVersion]);
+
+  useEffect(() => {
+    const handleConfigUpdate = () => setConfigVersion((prev) => prev + 1);
+    window.addEventListener("cybershield-config-updated", handleConfigUpdate);
+    return () => window.removeEventListener("cybershield-config-updated", handleConfigUpdate);
+  }, []);
 
   useEffect(() => {
     connect();

@@ -9,9 +9,10 @@ from typing import Any
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 
+from auth import ensure_admin_access, ensure_admin_websocket
 from osint_reid.config import ADMIN_API_TOKEN, SNAPSHOT_DIR
 from osint_reid.db import now_utc_iso
 from osint_reid.service import get_osint_service
@@ -22,21 +23,26 @@ router = APIRouter()
 _state_ws_clients: set[WebSocket] = set()
 
 
-def _require_admin_token(auth_header: str | None) -> None:
+def _require_admin_token(
+    authorization: str | None = None,
+    x_api_key: str | None = None,
+    api_key: str | None = None,
+) -> None:
     configured_token = os.getenv("ADMIN_API_TOKEN", ADMIN_API_TOKEN).strip()
     if not configured_token:
-        raise HTTPException(status_code=503, detail="ADMIN_API_TOKEN is not configured. Set it to enable protected write endpoints.")
-    supplied = (auth_header or "").strip()
-    if supplied.startswith("Bearer "):
-        supplied = supplied[len("Bearer ") :].strip()
-    if supplied != configured_token:
-        raise HTTPException(status_code=401, detail="Invalid admin token.")
+        return
+    ensure_admin_access(authorization=authorization, x_api_key=x_api_key, api_key=api_key)
 
 
 def _watchlist_dir() -> Path:
     path = Path(__file__).resolve().parents[1] / "watchlist"
     path.mkdir(exist_ok=True)
     return path
+
+
+def _sanitize_watchlist_name(value: str | None) -> str:
+    safe_value = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in (value or "").strip())
+    return safe_value.strip("._-")
 
 
 def _service_or_http():
@@ -50,6 +56,12 @@ def _snapshot_path(global_id: str, ts: str) -> Path:
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     safe_ts = ts.replace(":", "-")
     return SNAPSHOT_DIR / f"{global_id}_{safe_ts}.jpg"
+
+
+def _watchlist_snapshot_url(global_id: str, ts: str | None) -> str | None:
+    if not ts:
+        return None
+    return f"/api/stream/snapshot/{global_id}/{ts}.jpg"
 
 
 def _load_image_from_upload(raw: bytes) -> np.ndarray:
@@ -75,6 +87,8 @@ async def ws_broadcast_incident(payload: dict[str, Any]) -> None:
 
 @router.websocket("/ws/state")
 async def ws_state(websocket: WebSocket):
+    if not await ensure_admin_websocket(websocket):
+        return
     await websocket.accept()
     _state_ws_clients.add(websocket)
     service = get_osint_service()
@@ -95,13 +109,16 @@ def list_watchlist():
     entries = []
     for item in identities:
         meta = item.get("watchlist_meta") or {}
+        display_name = meta.get("display_name") or item["global_id"]
         entries.append(
             {
-                "identity": meta.get("display_name") or item["global_id"],
+                "identity": display_name,
+                "display_name": display_name,
                 "global_id": item["global_id"],
                 "filename": meta.get("snapshot_filename", ""),
                 "last_seen_ts": item.get("last_seen_ts"),
                 "snapshot_path": meta.get("snapshot_path", ""),
+                "snapshot_url": _watchlist_snapshot_url(item["global_id"], item.get("last_seen_ts")),
                 "watchlist_flag": item.get("watchlist_flag", 0),
             }
         )
@@ -114,11 +131,19 @@ async def enroll_watchlist(
     name: str = Form(...),
     file: UploadFile = File(...),
     authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    api_key: str | None = None,
 ):
-    _require_admin_token(authorization)
+    _require_admin_token(authorization, x_api_key, api_key)
+    display_name = _sanitize_watchlist_name(name)
+    if not display_name:
+        raise HTTPException(status_code=400, detail="A valid watchlist identity is required.")
 
     raw = await file.read()
     image = _load_image_from_upload(raw)
+    watchlist_path = _watchlist_dir() / f"{display_name}.jpg"
+    if watchlist_path.exists():
+        raise HTTPException(status_code=409, detail="A watchlist image already exists for that identity.")
 
     service = _service_or_http()
     face_embs = service.reid_worker.compute_face_embeddings([image])
@@ -136,7 +161,6 @@ async def enroll_watchlist(
         watchlist_meta={},
     )
 
-    watchlist_path = _watchlist_dir() / f"{global_id}.jpg"
     watchlist_path.write_bytes(raw)
     snapshot = _snapshot_path(global_id, ts)
     snapshot.write_bytes(raw)
@@ -152,7 +176,7 @@ async def enroll_watchlist(
 
     # Write meta in-place with sqlite update for portability
     watchlist_meta = {
-        "display_name": name,
+        "display_name": display_name,
         "snapshot_filename": watchlist_path.name,
         "snapshot_path": str(snapshot),
     }
@@ -172,11 +196,13 @@ async def enroll_watchlist(
     return {
         "status": "success",
         "entry": {
-            "identity": name,
+            "identity": display_name,
+            "display_name": display_name,
             "global_id": global_id,
             "filename": watchlist_path.name,
             "last_seen_ts": ts,
             "snapshot_path": str(snapshot),
+            "snapshot_url": _watchlist_snapshot_url(global_id, ts),
         },
     }
 
@@ -191,7 +217,36 @@ def get_watchlist_identity(global_id: str):
     history = service.db.get_tracklets_for_global(global_id, limit=100)
     incidents = service.db.get_recent_incidents_for_global(global_id, limit=50)
     safe_identity = {k: v for k, v in identity.items() if k not in ("face_embedding", "reid_embedding")}
+    safe_identity["snapshot_url"] = _watchlist_snapshot_url(global_id, identity.get("last_seen_ts"))
     return {"identity": safe_identity, "match_history": history, "incidents": incidents}
+
+
+@router.delete("/api/watchlist/{global_id}")
+def delete_watchlist_identity(
+    global_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    api_key: str | None = None,
+):
+    _require_admin_token(authorization, x_api_key, api_key)
+    service = _service_or_http()
+    identity = service.db.get_global_identity(global_id)
+    if identity is None:
+        raise HTTPException(status_code=404, detail="Global identity not found")
+
+    meta = identity.get("watchlist_meta") or {}
+    filename = str(meta.get("snapshot_filename") or "").strip()
+    if filename:
+        (_watchlist_dir() / filename).unlink(missing_ok=True)
+    (_watchlist_dir() / f"{global_id}.jpg").unlink(missing_ok=True)
+    snapshot_path = meta.get("snapshot_path")
+    if snapshot_path:
+        Path(str(snapshot_path)).unlink(missing_ok=True)
+
+    deleted = service.db.delete_global_identity(global_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Global identity not found")
+    return {"status": "success", "global_id": global_id}
 
 
 @router.get("/api/records/tracklets")
@@ -201,8 +256,13 @@ def get_tracklets(limit: int = 50):
 
 
 @router.post("/api/tracklet/{tracklet_id}/enrich")
-def enrich_tracklet(tracklet_id: str, authorization: str | None = Header(default=None)):
-    _require_admin_token(authorization)
+def enrich_tracklet(
+    tracklet_id: str,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    api_key: str | None = None,
+):
+    _require_admin_token(authorization, x_api_key, api_key)
     service = _service_or_http()
     if service.db.get_tracklet(tracklet_id) is None:
         raise HTTPException(status_code=404, detail=f"Tracklet not found: {tracklet_id}")
@@ -226,11 +286,20 @@ def worker_queue_metrics():
 
 
 @router.get("/api/stream/snapshot/{global_id}/{ts}.jpg")
-def stream_snapshot(global_id: str, ts: str):
+def stream_snapshot(global_id: str, ts: str, request: Request):
+    _require_admin_token(
+        request.headers.get("Authorization"),
+        request.headers.get("X-API-Key"),
+        request.query_params.get("api_key"),
+    )
     path = _snapshot_path(global_id, ts)
     if not path.exists():
         # fallback to watchlist image
-        fallback = _watchlist_dir() / f"{global_id}.jpg"
+        service = _service_or_http()
+        identity = service.db.get_global_identity(global_id)
+        meta = identity.get("watchlist_meta") if identity else {}
+        fallback_name = str((meta or {}).get("snapshot_filename") or f"{global_id}.jpg")
+        fallback = _watchlist_dir() / fallback_name
         if fallback.exists():
             return FileResponse(fallback)
         raise HTTPException(status_code=404, detail="Snapshot not found")

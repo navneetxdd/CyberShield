@@ -1,16 +1,33 @@
-import { CONFIG } from "./config";
+import { getConfig } from "./config";
 
 function buildUrl(path: string): string {
+  const config = getConfig();
   if (/^https?:\/\//i.test(path)) {
     return path;
   }
-  return `${CONFIG.API_URL}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${config.API_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+export function apiAssetUrl(path: string | null | undefined): string {
+  const value = String(path || "").trim();
+  if (!value) {
+    return "";
+  }
+  const config = getConfig();
+  const resolved = /^https?:\/\//i.test(value)
+    ? new URL(value)
+    : new URL(value.startsWith("/") ? `${config.API_URL}${value}` : `${config.API_URL}/${value}`);
+  if (config.API_KEY && !resolved.searchParams.has("api_key")) {
+    resolved.searchParams.set("api_key", config.API_KEY);
+  }
+  return resolved.toString();
 }
 
 function withApiKey(headers?: HeadersInit): Headers {
+  const config = getConfig();
   const resolved = new Headers(headers || {});
-  if (CONFIG.API_KEY && !resolved.has("X-API-Key")) {
-    resolved.set("X-API-Key", CONFIG.API_KEY);
+  if (config.API_KEY && !resolved.has("X-API-Key")) {
+    resolved.set("X-API-Key", config.API_KEY);
   }
   return resolved;
 }

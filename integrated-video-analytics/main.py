@@ -6,9 +6,10 @@ import os
 import tempfile
 import time
 from contextlib import asynccontextmanager
+import ipaddress
 from pathlib import Path
 import csv
-import io
+from urllib.parse import urlparse
 
 from typing import Dict, List
 
@@ -23,7 +24,9 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from matplotlib import pyplot as plt
 
+from auth import admin_auth_enabled, ensure_admin_request, ensure_admin_websocket
 from database import (
+    clear_events,
     get_face_records,
     get_metric_history,
     get_ocr_analytics,
@@ -32,7 +35,14 @@ from database import (
     get_traffic_analytics,
     get_vehicle_records,
 )
-from pipeline import get_system_health_snapshot, has_any_ocr_path, warm_shared_resources
+from pipeline import (
+    DETECTION_CONFIDENCE,
+    FACE_MATCH_THRESHOLD,
+    PLATE_CONFIDENCE,
+    get_system_health_snapshot,
+    has_any_ocr_path,
+    warm_shared_resources,
+)
 from runtime import CameraRuntime
 from osint_reid.api import router as osint_router
 
@@ -43,6 +53,7 @@ UPLOAD_DIR = BASE_DIR / "uploads"
 WATCHLIST_DIR = BASE_DIR / "watchlist"
 FRONTEND_DIST_DIR = BASE_DIR / "static_ui"
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
+SNAPSHOT_DIR = BASE_DIR / "snapshots"
 LEGACY_INDEX_PATH = BASE_DIR / "templates" / "index.html"
 
 runtimes: Dict[str, CameraRuntime] = {}
@@ -58,7 +69,9 @@ STARTUP_STATE = {
     "last_updated": None,
 }
 RUNTIME_SETTINGS = {
-    "face_threshold": 1.05,
+    "detection_confidence": float(DETECTION_CONFIDENCE),
+    "plate_confidence": float(PLATE_CONFIDENCE),
+    "face_threshold": float(FACE_MATCH_THRESHOLD),
 }
 
 
@@ -93,6 +106,10 @@ def env_flag(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+ALLOW_LOOPBACK_STREAMS = env_flag("CYBERSHIELD_ALLOW_LOOPBACK_STREAMS", False)
+ALLOW_LINK_LOCAL_STREAMS = env_flag("CYBERSHIELD_ALLOW_LINK_LOCAL_STREAMS", False)
 
 
 def parse_size_bytes(value: str | None, default: int) -> int:
@@ -131,6 +148,55 @@ def sanitize_upload_name(filename: str | None) -> str:
 def sanitize_watchlist_name(value: str | None) -> str:
     safe_value = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in (value or "").strip())
     return safe_value.strip("._-")
+
+
+def validate_camera_source(source: str) -> str:
+    candidate = str(source or "").strip()
+    if not candidate:
+        raise HTTPException(status_code=400, detail="A camera source is required.")
+
+    if candidate.isdigit():
+        return candidate
+
+    source_path = Path(candidate)
+    if source_path.exists():
+        resolved = source_path.resolve()
+        uploads_root = UPLOAD_DIR.resolve()
+        if resolved.is_file() and uploads_root in resolved.parents:
+            return str(resolved)
+        raise HTTPException(
+            status_code=400,
+            detail="Only uploaded videos inside uploads/ can be mounted from a filesystem path.",
+        )
+
+    parsed = urlparse(candidate)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"rtsp", "http", "https"}:
+        raise HTTPException(status_code=400, detail="Source must be a camera index, uploaded file, or RTSP/HTTP(S) URL.")
+
+    hostname = (parsed.hostname or "").strip()
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Source URL must include a valid hostname.")
+
+    if hostname.lower() == "localhost" and not ALLOW_LOOPBACK_STREAMS:
+        raise HTTPException(status_code=400, detail="Loopback stream sources are blocked by default.")
+
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        host_ip = None
+
+    if host_ip is not None:
+        if host_ip.is_loopback and not ALLOW_LOOPBACK_STREAMS:
+            raise HTTPException(status_code=400, detail="Loopback stream sources are blocked by default.")
+        if host_ip.is_link_local and not ALLOW_LINK_LOCAL_STREAMS:
+            raise HTTPException(status_code=400, detail="Link-local stream sources are blocked by default.")
+        if host_ip.is_multicast or host_ip.is_unspecified or host_ip.is_reserved:
+            raise HTTPException(status_code=400, detail="Unsupported or unsafe stream host.")
+        if str(host_ip) == "169.254.169.254":
+            raise HTTPException(status_code=400, detail="Metadata service addresses are blocked.")
+
+    return candidate
 
 
 def parse_csv_env(name: str, default: List[str]) -> List[str]:
@@ -188,6 +254,46 @@ def _render_chart_to_tempfile(plotter) -> Path:
     finally:
         plt.close(figure)
     return Path(temp_path)
+
+
+def _best_effort_cpu_temp_c() -> float | None:
+    sensors_fn = psutil.__dict__.get("sensors_temperatures")
+    if sensors_fn is None:
+        return None
+    try:
+        sensors = sensors_fn()
+    except Exception:
+        return None
+    if not sensors:
+        return None
+
+    preferred_groups = ("coretemp", "k10temp", "cpu_thermal", "cpu-thermal", "acpitz")
+    for group_name in preferred_groups:
+        for entry in sensors.get(group_name, []):
+            current = getattr(entry, "current", None)
+            if isinstance(current, (int, float)):
+                return round(float(current), 1)
+    for entries in sensors.values():
+        for entry in entries:
+            label = str(getattr(entry, "label", "") or "").lower()
+            current = getattr(entry, "current", None)
+            if isinstance(current, (int, float)) and ("cpu" in label or "package" in label or "core" in label):
+                return round(float(current), 1)
+    return None
+
+
+def get_ui_system_health_snapshot(camera_state: dict | None = None) -> dict:
+    stats = get_system_stats_snapshot()
+    return {
+        "cpu": round(float(stats.get("cpu_percent") or 0.0), 1),
+        "ram": round(float(stats.get("memory_percent") or 0.0), 1),
+        "gpu": round(float(stats.get("gpu_percent") or 0.0), 1),
+        "gpu_mem": round(float(stats.get("gpu_memory_percent") or 0.0), 1),
+        "cpu_temp": stats.get("cpu_temp_c"),
+        "gpu_temp": stats.get("gpu_temp_c"),
+        "throughput": camera_state.get("throughput_gbps") if camera_state is not None else None,
+        "admin_auth_enabled": bool(stats.get("admin_auth_enabled")),
+    }
 
 
 def build_vehicle_totals_chart(vehicle_totals: Dict[str, int]) -> Path:
@@ -343,13 +449,18 @@ def get_initial_state(camera_id: str, source: str = "") -> dict:
         "detector_model": None,
         "plate_model": None,
         "device": "cpu",
+        "stream_profile": "balanced",
+        "system_health": get_ui_system_health_snapshot(),
     }
 
 
 def get_state_snapshot(camera_id: str) -> dict:
     if camera_id not in runtimes:
         return get_initial_state(camera_id)
-    return runtimes[camera_id].snapshot_state()
+    snapshot = runtimes[camera_id].snapshot_state()
+    snapshot["system_health"] = get_ui_system_health_snapshot(snapshot)
+    snapshot["stream_profile"] = runtimes[camera_id].get_stream_profile()
+    return snapshot
 
 
 def release_camera(camera_id: str, drop_state: bool = False) -> None:
@@ -359,15 +470,18 @@ def release_camera(camera_id: str, drop_state: bool = False) -> None:
 
 
 def mount_camera(camera_id: str, source: str) -> None:
+    safe_source = validate_camera_source(source)
     release_camera(camera_id)
-    state = get_initial_state(camera_id, str(source))
-    runtimes[camera_id] = CameraRuntime(camera_id, str(source), state)
+    state = get_initial_state(camera_id, str(safe_source))
+    runtimes[camera_id] = CameraRuntime(camera_id, str(safe_source), state)
+    runtimes[camera_id].apply_runtime_settings(RUNTIME_SETTINGS)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     UPLOAD_DIR.mkdir(exist_ok=True)
     WATCHLIST_DIR.mkdir(exist_ok=True)
+    SNAPSHOT_DIR.mkdir(exist_ok=True)
     STARTUP_STATE["phase"] = "initializing"
     STARTUP_STATE["ready"] = False
     STARTUP_STATE["preload_enabled"] = PRELOAD_SHARED_MODELS
@@ -448,11 +562,20 @@ def get_system_stats_snapshot() -> dict:
         "memory_percent": float(virtual_memory.percent),
         "memory_used_mb": round(float(virtual_memory.used) / (1024 * 1024), 2),
         "memory_total_mb": round(float(virtual_memory.total) / (1024 * 1024), 2),
+        "ram_used_gb": round(float(virtual_memory.used) / (1024 * 1024 * 1024), 2),
+        "cpu_count": int(psutil.cpu_count(logical=True) or 0),
+        "active_cameras": len([runtime for runtime in runtimes.values() if runtime.running]),
+        "watchlist_count": len(list_watchlist_entries()),
+        "device": str(get_system_health_snapshot().get("device") or "cpu"),
+        "admin_auth_enabled": admin_auth_enabled(),
+        "cpu_temp_c": _best_effort_cpu_temp_c(),
         "gpu_available": False,
         "gpu_name": None,
         "gpu_percent": 0.0,
         "gpu_memory_used_mb": 0.0,
         "gpu_memory_total_mb": 0.0,
+        "gpu_memory_percent": 0.0,
+        "gpu_temp_c": None,
     }
 
     if not _NVML_AVAILABLE or pynvml is None:
@@ -470,6 +593,8 @@ def get_system_stats_snapshot() -> dict:
                 "gpu_percent": float(util.gpu),
                 "gpu_memory_used_mb": round(float(memory.used) / (1024 * 1024), 2),
                 "gpu_memory_total_mb": round(float(memory.total) / (1024 * 1024), 2),
+                "gpu_memory_percent": round((float(memory.used) / max(float(memory.total), 1.0)) * 100.0, 2),
+                "gpu_temp_c": round(float(pynvml.nvmlDeviceGetTemperature(handle, pynvml.NVML_TEMPERATURE_GPU)), 1),
             }
         )
     except Exception:
@@ -541,7 +666,8 @@ async def list_cameras():
 
 
 @app.post("/api/cameras/add")
-async def add_camera(camera_id: str, source: str):
+async def add_camera(request: Request, camera_id: str, source: str):
+    ensure_admin_request(request)
     camera_id = sanitize_camera_id(camera_id)
     try:
         mount_camera(camera_id, source)
@@ -550,16 +676,44 @@ async def add_camera(camera_id: str, source: str):
     return {"status": "success", "camera_id": camera_id, "info": f"Camera {camera_id} added."}
 
 
+@app.post("/api/cameras/validate-source")
+async def validate_camera_source_route(request: Request, source: str):
+    ensure_admin_request(request)
+    normalized = validate_camera_source(source)
+    parsed = urlparse(normalized) if not normalized.isdigit() else None
+    source_type = "device" if normalized.isdigit() else "url"
+    if Path(normalized).exists():
+        source_type = "file"
+    return {
+        "status": "valid",
+        "source": normalized,
+        "source_type": source_type,
+        "scheme": parsed.scheme if parsed is not None else None,
+        "hostname": parsed.hostname if parsed is not None else None,
+    }
+
+
 @app.delete("/api/cameras/{camera_id}")
-async def remove_camera(camera_id: str):
+async def remove_camera(camera_id: str, request: Request):
+    ensure_admin_request(request)
     if camera_id not in runtimes:
         raise HTTPException(status_code=404, detail="Camera not found")
     release_camera(camera_id, drop_state=True)
     return {"status": "success", "camera_id": camera_id}
 
 
+@app.post("/api/admin/cameras/remove-all")
+async def remove_all_cameras(request: Request):
+    ensure_admin_request(request)
+    removed = list(runtimes.keys())
+    for camera_id in removed:
+        release_camera(camera_id, drop_state=True)
+    return {"status": "success", "removed": removed, "count": len(removed)}
+
+
 @app.post("/api/video/upload")
 async def upload_video(request: Request, file: UploadFile = File(...), camera_id: str | None = None):
+    ensure_admin_request(request)
     if camera_id is None:
         form = await request.form()
         raw_camera_id = form.get("camera_id")
@@ -595,7 +749,8 @@ def generate_frames(camera_id: str):
 
 
 @app.get("/api/video/stream")
-def video_feed_default():
+def video_feed_default(request: Request):
+    ensure_admin_request(request)
     if not runtimes:
         raise HTTPException(status_code=404, detail="No camera available")
     camera_id = next(iter(runtimes.keys()))
@@ -606,13 +761,28 @@ def video_feed_default():
 
 
 @app.get("/api/video/stream/{camera_id}")
-def video_feed(camera_id: str):
+def video_feed(camera_id: str, request: Request):
+    ensure_admin_request(request)
     if camera_id not in runtimes:
         raise HTTPException(status_code=404, detail="Camera not found")
     return StreamingResponse(
         generate_frames(camera_id),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/snapshots/{snapshot_path:path}", include_in_schema=False)
+def serve_snapshot(snapshot_path: str, request: Request):
+    ensure_admin_request(request)
+    resolved_path = (SNAPSHOT_DIR / snapshot_path).resolve()
+    base_dir = SNAPSHOT_DIR.resolve()
+    try:
+        resolved_path.relative_to(base_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Snapshot not found") from exc
+    if not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return FileResponse(str(resolved_path))
 
 
 @app.get("/api/analytics/status")
@@ -630,9 +800,21 @@ def system_stats():
     return get_system_stats_snapshot()
 
 
+@app.get("/api/settings/runtime")
+def get_runtime_settings():
+    return dict(RUNTIME_SETTINGS)
+
+
 @app.get("/api/logs/history")
 def get_logs_history(limit: int = 50, query: str | None = None, camera_id: str | None = None):
     return {"logs": get_recent_events(limit=limit, query=query, camera_id=camera_id)}
+
+
+@app.post("/api/admin/events/clear")
+def clear_event_history(request: Request, camera_id: str | None = None):
+    ensure_admin_request(request)
+    clear_events(camera_id=camera_id)
+    return {"status": "success", "camera_id": camera_id}
 
 
 @app.get("/api/records/plates")
@@ -766,6 +948,7 @@ def get_face_threshold_setting():
 
 @app.post("/api/settings/face-threshold")
 async def set_face_threshold_setting(request: Request):
+    ensure_admin_request(request)
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON body is required")
@@ -779,15 +962,79 @@ async def set_face_threshold_setting(request: Request):
     if parsed <= 0:
         raise HTTPException(status_code=400, detail="value must be positive")
     RUNTIME_SETTINGS["face_threshold"] = parsed
+    for runtime in runtimes.values():
+        runtime.set_face_match_threshold(parsed)
     return {"status": "success", "value": parsed}
+
+
+@app.post("/api/settings/runtime")
+async def update_runtime_settings(request: Request):
+    ensure_admin_request(request)
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON body is required.")
+
+    updated: dict[str, float] = {}
+    if "detection_confidence" in payload:
+        try:
+            value = float(payload["detection_confidence"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="detection_confidence must be numeric.") from exc
+        if not (0.05 <= value <= 0.95):
+            raise HTTPException(status_code=400, detail="detection_confidence must be between 0.05 and 0.95.")
+        RUNTIME_SETTINGS["detection_confidence"] = value
+        updated["detection_confidence"] = value
+    if "plate_confidence" in payload:
+        try:
+            value = float(payload["plate_confidence"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="plate_confidence must be numeric.") from exc
+        if not (0.05 <= value <= 0.95):
+            raise HTTPException(status_code=400, detail="plate_confidence must be between 0.05 and 0.95.")
+        RUNTIME_SETTINGS["plate_confidence"] = value
+        updated["plate_confidence"] = value
+    if "face_threshold" in payload:
+        try:
+            value = float(payload["face_threshold"])
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="face_threshold must be numeric.") from exc
+        if value <= 0.0:
+            raise HTTPException(status_code=400, detail="face_threshold must be positive.")
+        RUNTIME_SETTINGS["face_threshold"] = value
+        updated["face_threshold"] = value
+
+    for runtime in runtimes.values():
+        runtime.apply_runtime_settings(RUNTIME_SETTINGS)
+
+    return {"status": "success", "settings": dict(RUNTIME_SETTINGS), "updated": updated}
+
+
+@app.get("/api/video/profile")
+def get_video_profile(camera_id: str):
+    if camera_id not in runtimes:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    runtime = runtimes[camera_id]
+    return {"camera_id": camera_id, "profile": runtime.get_stream_profile()}
+
+
+@app.post("/api/video/profile")
+def set_video_profile(camera_id: str, profile: str, request: Request):
+    ensure_admin_request(request)
+    if camera_id not in runtimes:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    runtime = runtimes[camera_id]
+    runtime.set_stream_profile(profile)
+    return {"status": "success", "camera_id": camera_id, "profile": runtime.get_stream_profile()}
 
 
 @app.get("/api/export/maltego")
 def export_maltego_graph(
+    request: Request,
     camera_id: str | None = None,
     entity: str = "faces",
     limit: int = 1000,
 ):
+    ensure_admin_request(request)
     normalized_entity = (entity or "faces").strip().lower()
     if normalized_entity not in {"faces", "vehicles", "plates", "events"}:
         raise HTTPException(status_code=400, detail="entity must be one of: faces, vehicles, plates, events")
@@ -879,7 +1126,8 @@ def get_watchlist():
 
 
 @app.post("/api/watchlist/files")
-async def add_watchlist_entry(name: str = Form(...), file: UploadFile = File(...)):
+async def add_watchlist_entry(request: Request, name: str = Form(...), file: UploadFile = File(...)):
+    ensure_admin_request(request)
     identity = sanitize_watchlist_name(name)
     if not identity:
         raise HTTPException(status_code=400, detail="A valid identity name is required.")
@@ -897,7 +1145,8 @@ async def add_watchlist_entry(name: str = Form(...), file: UploadFile = File(...
 
 
 @app.delete("/api/watchlist/files/{identity}")
-def delete_watchlist_entry(identity: str):
+def delete_watchlist_entry(identity: str, request: Request):
+    ensure_admin_request(request)
     safe_identity = sanitize_watchlist_name(identity)
     if not safe_identity:
         raise HTTPException(status_code=400, detail="Invalid identity.")
@@ -915,6 +1164,8 @@ def delete_watchlist_entry(identity: str):
 
 @app.websocket("/ws/analytics/{camera_id}")
 async def websocket_endpoint(websocket: WebSocket, camera_id: str):
+    if not await ensure_admin_websocket(websocket):
+        return
     await websocket.accept()
     try:
         while True:
@@ -925,7 +1176,8 @@ async def websocket_endpoint(websocket: WebSocket, camera_id: str):
 
 
 @app.get("/api/reports/download")
-async def download_report(camera_id: str):
+async def download_report(camera_id: str, request: Request):
+    ensure_admin_request(request)
     state = get_state_snapshot(camera_id)
     vehicle_records = get_vehicle_records(limit=10, camera_id=camera_id)
     plate_records = get_plate_reads(limit=10, camera_id=camera_id)
@@ -1066,8 +1318,9 @@ async def serve_spa(full_path: str):
     if full_path.startswith(blocked_prefixes):
         raise HTTPException(status_code=404, detail="Not found")
 
-    requested_path = FRONTEND_DIST_DIR / full_path
-    if requested_path.exists() and requested_path.is_file():
+    dist_root = FRONTEND_DIST_DIR.resolve()
+    requested_path = (dist_root / full_path).resolve()
+    if dist_root in requested_path.parents and requested_path.exists() and requested_path.is_file():
         return FileResponse(requested_path)
 
     index_path = FRONTEND_DIST_DIR / "index.html"

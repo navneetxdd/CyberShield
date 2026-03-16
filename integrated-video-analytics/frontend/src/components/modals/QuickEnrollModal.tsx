@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AlertTriangle, Check, Info, Shield, User, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { apiUpload } from "@/lib/api";
+import { apiAssetUrl, apiUpload } from "@/lib/api";
 import { toast } from "sonner";
 
 interface QuickEnrollModalProps {
@@ -21,7 +21,7 @@ export function QuickEnrollModal({ face, open, onClose }: QuickEnrollModalProps)
       return;
     }
 
-    const snapshotUrl = face?.snapshot_url || face?.image;
+    const snapshotUrl = apiAssetUrl(face?.snapshot_url || face?.image);
     if (!snapshotUrl) {
       toast.error("No face snapshot is available for quick enrollment.");
       return;
@@ -39,7 +39,7 @@ export function QuickEnrollModal({ face, open, onClose }: QuickEnrollModalProps)
       const form = new FormData();
       form.append("name", name);
       form.append("file", imageFile);
-      await apiUpload("/api/watchlist/files", form);
+      await apiUpload("/api/watchlist", form);
 
       toast.success(`Subject ${name} enrolled successfully.`);
       setName("");
@@ -66,7 +66,7 @@ export function QuickEnrollModal({ face, open, onClose }: QuickEnrollModalProps)
             <div className="flex gap-4">
               <div className="w-20 h-20 border border-border bg-panel flex items-center justify-center shrink-0 relative">
                 {face.snapshot_url || face.image ? (
-                  <img src={face.snapshot_url || face.image} className="w-full h-full object-cover" alt="Subject" />
+                  <img src={apiAssetUrl(face.snapshot_url || face.image)} className="w-full h-full object-cover" alt="Subject" />
                 ) : (
                   <User size={32} className="text-muted-foreground/30" />
                 )}

@@ -31,9 +31,9 @@ export function AlertOverlay({ eventLogs, onFlash, enabled = true }: AlertOverla
   useEffect(() => {
     if (!enabled) return;
     if (!eventLogs || eventLogs.length === 0) return;
-    const latest = eventLogs[eventLogs.length - 1];
+    const latest = eventLogs[0];
     if (!latest) return;
-    const uid = `${latest.time}-${latest.type}`;
+    const uid = `${latest.time}-${latest.type}-${latest.detail}`;
     if (uid === lastSeenRef.current) return;
 
     const type = (latest.type || "").toUpperCase();
@@ -53,7 +53,7 @@ export function AlertOverlay({ eventLogs, onFlash, enabled = true }: AlertOverla
         description: "Subject detected on active feed — immediate review required",
       });
     }
-  }, [eventLogs]);
+  }, [enabled, eventLogs, onFlash]);
 
   return null;
 }

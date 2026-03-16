@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Upload, Wifi } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { CONFIG } from "@/lib/config";
+import { getConfig } from "@/lib/config";
 import { apiFetch } from "@/lib/api";
 
 interface AddFeedModalProps {
@@ -40,9 +40,12 @@ export function AddFeedModal({ open, onClose, onCameraAdded }: AddFeedModalProps
 
       // Use XHR for real progress tracking
       const data = await new Promise<any>((resolve, reject) => {
+        const config = getConfig();
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${CONFIG.API_URL}/api/video/upload`);
-        xhr.setRequestHeader("X-API-Key", CONFIG.API_KEY);
+        xhr.open("POST", `${config.API_URL}/api/video/upload`);
+        if (config.API_KEY) {
+          xhr.setRequestHeader("X-API-Key", config.API_KEY);
+        }
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
         };
@@ -88,7 +91,7 @@ export function AddFeedModal({ open, onClose, onCameraAdded }: AddFeedModalProps
   const testConnection = async () => {
     setConnTest("testing");
     try {
-      await fetch(streamUrl, { method: "HEAD", mode: "no-cors" });
+      await apiFetch(`/api/cameras/validate-source?source=${encodeURIComponent(streamUrl)}`, { method: "POST" });
       setConnTest("ok");
     } catch { setConnTest("fail"); }
   };

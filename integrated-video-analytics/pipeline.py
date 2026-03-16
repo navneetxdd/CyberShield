@@ -9,7 +9,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TypedDict
 
 import cv2
 try:
@@ -79,7 +79,47 @@ TARGET_CLASSES = {
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
 WATCHLIST_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 PLATE_ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-PLATE_TEXT_PATTERN = re.compile(r"^[A-Z0-9]{4,10}$")
+SNAPSHOT_DIR = BASE_DIR / "snapshots"
+FACE_SNAPSHOT_DIR = SNAPSHOT_DIR / "faces"
+PLATE_SNAPSHOT_DIR = SNAPSHOT_DIR / "plates"
+VEHICLE_SNAPSHOT_DIR = SNAPSHOT_DIR / "vehicles"
+PLATE_TEXT_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{5,10}$")
+INDIA_PLATE_PATTERNS = (
+    re.compile(r"^[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{4}$"),
+    re.compile(r"^\d{2}BH\d{4}[A-Z]{0,2}$"),
+)
+INDIA_STATE_CODES = {
+    "AN", "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ", "HR", "HP",
+    "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP", "MZ", "NL", "OD", "PB",
+    "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB",
+}
+LETTER_TO_DIGIT_CONFUSIONS = {
+    "O": "0",
+    "Q": "0",
+    "D": "0",
+    "I": "1",
+    "L": "1",
+    "Z": "2",
+    "S": "5",
+    "B": "8",
+    "G": "6",
+}
+DIGIT_TO_LETTER_CONFUSIONS = {
+    "0": "O",
+    "1": "I",
+    "2": "Z",
+    "5": "S",
+    "6": "G",
+    "8": "B",
+}
+
+
+class PlateVote(TypedDict):
+    hits: float
+    score: float
+    confidence: float
+    region_score: float
+    region: Any | None
 
 
 def resolve_model_path(explicit: Optional[str], *local_candidates: Path, fallback: str) -> str:
@@ -92,10 +132,72 @@ def resolve_model_path(explicit: Optional[str], *local_candidates: Path, fallbac
 
 
 def normalize_plate_text(text: str) -> Optional[str]:
+    """
+    Normalize raw OCR text into a plausible licence plate.
+
+    This aggressively rejects junk:
+    - enforces mixed alphanumeric plates with both letters and digits
+    - enforces a minimum length
+    - scores against Indian-style patterns and state codes
+    """
     cleaned = "".join(ch for ch in text.upper() if ch.isalnum())
-    if not PLATE_TEXT_PATTERN.match(cleaned):
+    # Drop obviously bogus reads (too short/too long)
+    if len(cleaned) < 6 or len(cleaned) > 10:
         return None
-    return cleaned
+
+    variants = [cleaned]
+
+    # Try to correct first two characters (state code) to letters
+    if len(cleaned) >= 2:
+        prefix = "".join(DIGIT_TO_LETTER_CONFUSIONS.get(ch, ch) for ch in cleaned[:2])
+        variants.append(prefix + cleaned[2:])
+
+    # Try to correct typical NNDD pattern for India plates
+    if len(cleaned) >= 6:
+        district_two = (
+            "".join(DIGIT_TO_LETTER_CONFUSIONS.get(ch, ch) for ch in cleaned[:2])
+            + "".join(LETTER_TO_DIGIT_CONFUSIONS.get(ch, ch) for ch in cleaned[2:4])
+            + cleaned[4:]
+        )
+        variants.append(district_two)
+
+    if len(cleaned) >= 8:
+        variants.append(
+            "".join(DIGIT_TO_LETTER_CONFUSIONS.get(ch, ch) for ch in cleaned[:2])
+            + "".join(LETTER_TO_DIGIT_CONFUSIONS.get(ch, ch) for ch in cleaned[2:4])
+            + "".join(DIGIT_TO_LETTER_CONFUSIONS.get(ch, ch) for ch in cleaned[4:-4])
+            + "".join(LETTER_TO_DIGIT_CONFUSIONS.get(ch, ch) for ch in cleaned[-4:])
+        )
+
+    def score_plate(candidate: str) -> int:
+        # Must be strictly alphanumeric and contain both letters and digits
+        if not PLATE_TEXT_PATTERN.match(candidate):
+            return -100
+        if not any(ch.isalpha() for ch in candidate) or not any(ch.isdigit() for ch in candidate):
+            return -100
+
+        score = 0
+        # Reward Indian plate patterns and valid state codes
+        if any(pattern.match(candidate) for pattern in INDIA_PLATE_PATTERNS):
+            score += 5
+        if len(candidate) >= 2 and candidate[:2] in INDIA_STATE_CODES:
+            score += 2
+
+        # Require at least 2 letters and 2 digits overall
+        letters = sum(1 for ch in candidate if ch.isalpha())
+        digits = sum(1 for ch in candidate if ch.isdigit())
+        if letters < 2 or digits < 2:
+            score -= 4
+
+        # Penalise extreme repetition (e.g. "1111111")
+        repeated_penalty = max(candidate.count(ch) for ch in set(candidate))
+        if repeated_penalty >= len(candidate) - 1:
+            score -= 3
+        return score
+
+    deduped_variants = list(dict.fromkeys(variants))
+    best = max(deduped_variants, key=lambda c: (score_plate(c), 1 if c == cleaned else 0))
+    return best if score_plate(best) >= 2 else None
 
 
 def detector_fallback_name() -> str:
@@ -187,12 +289,12 @@ DETECTION_IMAGE_SIZE = read_env_int(
 )
 PLATE_IMAGE_SIZE = read_env_int("CYBERSHIELD_PLATE_IMGSZ", 640, minimum=256, maximum=1280)
 MIN_STABLE_FRAMES = read_env_int("CYBERSHIELD_MIN_STABLE_FRAMES", 2, minimum=1, maximum=12)
-PLATE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_SCAN_INTERVAL", 2.0, minimum=0.2)
-PLATE_REFRESH_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_REFRESH_INTERVAL", 8.0, minimum=0.5)
+PLATE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_SCAN_INTERVAL", 0.75, minimum=0.2)
+PLATE_REFRESH_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_PLATE_REFRESH_INTERVAL", 3.0, minimum=0.5)
 FACE_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_FACE_SCAN_INTERVAL", 3.0, minimum=0.5)
 PLATE_OCR_TARGET_WIDTH = read_env_int("CYBERSHIELD_PLATE_TARGET_WIDTH", 480, minimum=240, maximum=1280)
-PLATE_HEURISTIC_MIN_VEHICLE_WIDTH = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_WIDTH", 100, minimum=80, maximum=1000)
-PLATE_HEURISTIC_MIN_VEHICLE_HEIGHT = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_HEIGHT", 80, minimum=40, maximum=1000)
+PLATE_HEURISTIC_MIN_VEHICLE_WIDTH = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_WIDTH", 160, minimum=80, maximum=1000)
+PLATE_HEURISTIC_MIN_VEHICLE_HEIGHT = read_env_int("CYBERSHIELD_PLATE_HEURISTIC_MIN_HEIGHT", 120, minimum=40, maximum=1000)
 RENDER_TRACK_TTL_SECONDS = read_env_float(
     "CYBERSHIELD_RENDER_TRACK_TTL",
     1.0 if torch.cuda.is_available() else 1.75,
@@ -207,14 +309,14 @@ RENDER_TRACK_LATENCY_MULTIPLIER = read_env_float(
 )
 TRACK_STALE_SECONDS = read_env_float("CYBERSHIELD_TRACK_STALE_SECONDS", 15.0, minimum=1.0)
 METRIC_WRITE_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_METRIC_WRITE_INTERVAL", 2.0, minimum=0.5)
-PLATE_CONFIRMATION_HITS = read_env_int("CYBERSHIELD_PLATE_CONFIRMATION_HITS", 1, minimum=1, maximum=8)
+PLATE_CONFIRMATION_HITS = read_env_int("CYBERSHIELD_PLATE_CONFIRMATION_HITS", 2, minimum=1, maximum=8)
 PLATE_DIRECT_ACCEPT_CONFIDENCE = read_env_float(
     "CYBERSHIELD_PLATE_DIRECT_CONFIDENCE",
-    0.50,
+    0.72,
     minimum=0.1,
     maximum=0.99,
 )
-PLATE_MIN_AGGREGATE_SCORE = read_env_float("CYBERSHIELD_PLATE_MIN_SCORE", 0.28, minimum=0.1)
+PLATE_MIN_AGGREGATE_SCORE = read_env_float("CYBERSHIELD_PLATE_MIN_SCORE", 1.1, minimum=0.1)
 PLATE_EXECUTOR_WORKERS = read_env_int(
     "CYBERSHIELD_PLATE_WORKERS",
     max(2, min(4, os.cpu_count() or 4)),
@@ -227,14 +329,14 @@ DB_QUEUE_LIMIT = read_env_int("CYBERSHIELD_DB_QUEUE_LIMIT", 256, minimum=8, maxi
 UNIQUE_CACHE_TTL_SECONDS = read_env_float("CYBERSHIELD_UNIQUE_CACHE_TTL", 3600.0, minimum=60.0)
 PLATE_CACHE_LIMIT = read_env_int("CYBERSHIELD_PLATE_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
 FACE_TRACK_CACHE_LIMIT = read_env_int("CYBERSHIELD_FACE_TRACK_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
-TRACK_ACTIVATION_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD", 0.13, minimum=0.05, maximum=0.9)
-TRACK_MATCHING_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_MATCHING_THRESHOLD", 0.65, minimum=0.3, maximum=0.95)
-TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 60, minimum=5, maximum=180)
+TRACK_ACTIVATION_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD", 0.25, minimum=0.05, maximum=0.9)
+TRACK_MATCHING_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_MATCHING_THRESHOLD", 0.7, minimum=0.3, maximum=0.95)
+TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 90, minimum=5, maximum=180)
 TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda.is_available() else 8, minimum=1, maximum=60)
-TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 1, minimum=1, maximum=8)
+TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 3, minimum=1, maximum=8)
 PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 300.0, minimum=10.0)
-PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.60, minimum=0.1, maximum=0.99)
-LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.20, minimum=0.05, maximum=0.95)
+PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.72, minimum=0.1, maximum=0.99)
+LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.32, minimum=0.05, maximum=0.95)
 CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE", 0.78, minimum=0.05, maximum=0.99)
 ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
 ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
@@ -582,6 +684,8 @@ class VideoPipeline:
         self.watchlist_dir = BASE_DIR / "watchlist"
         self.ocr_reader = SharedResources.get_ocr_reader()
         self.paddle_ocr_reader = SharedResources.get_paddle_ocr_reader()
+        self.detection_confidence = float(DETECTION_CONFIDENCE)
+        self.plate_confidence = float(PLATE_CONFIDENCE)
 
         self.track_states: Dict[int, Dict[str, Any]] = {}
         self.render_tracks: Dict[int, Dict[str, Any]] = {}
@@ -653,6 +757,8 @@ class VideoPipeline:
             print("Gemini enrichment enabled but GEMINI_API_KEY is missing.")
         if ENABLE_SAHI_INFERENCE and not HAS_SAHI:
             print("SAHI inference enabled but sahi is not installed.")
+        for directory in (SNAPSHOT_DIR, FACE_SNAPSHOT_DIR, PLATE_SNAPSHOT_DIR, VEHICLE_SNAPSHOT_DIR):
+            directory.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
     def gpu_available() -> bool:
@@ -662,6 +768,15 @@ class VideoPipeline:
         self.plate_executor.shutdown(wait=False, cancel_futures=True)
         self.face_executor.shutdown(wait=False, cancel_futures=True)
         self.db_executor.shutdown(wait=False, cancel_futures=True)
+
+    def set_detection_confidence(self, value: float) -> None:
+        self.detection_confidence = max(0.05, min(float(value), 0.95))
+
+    def set_plate_confidence(self, value: float) -> None:
+        self.plate_confidence = max(0.05, min(float(value), 0.95))
+
+    def set_face_match_threshold(self, value: float) -> None:
+        self.face_match_threshold = max(0.1, float(value))
 
     def snapshot_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         with self.state_lock:
@@ -829,7 +944,7 @@ class VideoPipeline:
             with torch.inference_mode():
                 results = self.detector.predict(
                     source=frame,
-                    conf=DETECTION_CONFIDENCE,
+                    conf=self.detection_confidence,
                     imgsz=DETECTION_IMAGE_SIZE,
                     classes=list(TARGET_CLASSES.keys()),
                     device=self.device,
@@ -951,7 +1066,7 @@ class VideoPipeline:
                 self._sahi_model = AutoDetectionModel.from_pretrained(
                     model_type="ultralytics",
                     model_path=DETECTION_MODEL_NAME,
-                    confidence_threshold=DETECTION_CONFIDENCE,
+                    confidence_threshold=self.detection_confidence,
                     device=self.device,
                 )
 
@@ -1017,6 +1132,63 @@ class VideoPipeline:
             min(y2 + pad_y, height),
         )
 
+    def _save_snapshot(self, directory: Path, prefix: str, image: Any, tracker_id: int, timestamp: float) -> Optional[str]:
+        if image is None or getattr(image, "size", 0) == 0:
+            return None
+        filename = f"{self.camera_id}_{tracker_id}_{prefix}.jpg"
+        target_path = directory / filename
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        if not ok:
+            return None
+        target_path.write_bytes(encoded.tobytes())
+        relative = target_path.relative_to(SNAPSHOT_DIR)
+        return f"/snapshots/{relative.as_posix()}?v={int(timestamp * 1000)}"
+
+    @staticmethod
+    def _heuristic_plate_regions(vehicle_crop) -> list[tuple[Any, float]]:
+        height, width = vehicle_crop.shape[:2]
+        if height == 0 or width == 0:
+            return []
+
+        gray = cv2.cvtColor(vehicle_crop, cv2.COLOR_BGR2GRAY) if vehicle_crop.ndim == 3 else vehicle_crop
+        blur = cv2.bilateralFilter(gray, 9, 75, 75)
+        edges = cv2.Canny(blur, 60, 180)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=1)
+        contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+
+        candidates: list[tuple[Any, float]] = []
+        frame_area = float(width * height)
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            if h <= 0 or w <= 0:
+                continue
+            aspect_ratio = w / max(h, 1)
+            box_area = float(w * h)
+            if aspect_ratio < 2.0 or aspect_ratio > 6.8:
+                continue
+            if box_area < frame_area * 0.01 or box_area > frame_area * 0.35:
+                continue
+            if y < int(height * 0.20):
+                continue
+            left, top, right, bottom = VideoPipeline._expand_box(x, y, x + w, y + h, width, height, scale_x=0.10, scale_y=0.18)
+            region = vehicle_crop[top:bottom, left:right]
+            if region.size == 0:
+                continue
+            position_score = min(1.0, max(y / max(height, 1), 0.0))
+            area_score = min(box_area / max(frame_area * 0.06, 1.0), 1.0)
+            score = round(0.35 + (position_score * 0.30) + (area_score * 0.35), 3)
+            candidates.append((region, score))
+
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        return candidates[:4]
+
+    def _best_plate_crop_from_vehicle(self, vehicle_crop) -> Any:
+        candidates = self._candidate_plate_regions(vehicle_crop)
+        if candidates:
+            return candidates[0][0]
+        return vehicle_crop
+
     @staticmethod
     def _prepare_plate_variants(region) -> list:
         if region.size == 0:
@@ -1079,7 +1251,7 @@ class VideoPipeline:
                         with torch.inference_mode():
                             plate_results = self.plate_detector.predict(
                                 source=window,
-                                conf=PLATE_CONFIDENCE,
+                                conf=self.plate_confidence,
                                 imgsz=PLATE_IMAGE_SIZE,
                                 verbose=False,
                                 device=self.device,
@@ -1092,7 +1264,7 @@ class VideoPipeline:
                         continue
                     for box in boxes:
                         confidence = float(box.conf[0])
-                        if confidence < PLATE_CONFIDENCE:
+                        if confidence < self.plate_confidence:
                             continue
                         x1, y1, x2, y2 = [int(value) for value in box.xyxy[0].tolist()]
                         left, top, right, bottom = self._expand_box(
@@ -1119,6 +1291,10 @@ class VideoPipeline:
         ):
             return regions
 
+        contour_regions = self._heuristic_plate_regions(vehicle_crop)
+        if contour_regions:
+            return contour_regions
+
         fallback_top = int(height * 0.48)
         fallback_bottom = min(height, int(height * 0.92))
         fallback_left = int(width * 0.08)
@@ -1130,22 +1306,27 @@ class VideoPipeline:
 
     @staticmethod
     def _vote_plate_candidate(
-        candidates: Dict[str, Dict[str, float]],
+        candidates: Dict[str, PlateVote],
         normalized_text: str,
         confidence: float,
         region_confidence: float,
+        region: Any,
     ) -> None:
         bucket = candidates.setdefault(
             normalized_text,
-            {"hits": 0.0, "score": 0.0, "confidence": 0.0},
+            {"hits": 0.0, "score": 0.0, "confidence": 0.0, "region": None, "region_score": 0.0},
         )
         bucket["hits"] += 1.0
         bucket["score"] += max(float(confidence), 0.0) + max(float(region_confidence), 0.0)
         bucket["confidence"] = max(bucket["confidence"], max(float(confidence), 0.0))
+        combined_score = max(float(confidence), 0.0) + max(float(region_confidence), 0.0)
+        if region is not None and combined_score >= float(bucket.get("region_score") or 0.0):
+            bucket["region"] = region.copy()
+            bucket["region_score"] = combined_score
 
     @staticmethod
     def _finalize_local_vote(
-        candidates: Dict[str, Dict[str, float]],
+        candidates: Dict[str, PlateVote],
         source: str,
     ) -> Optional[Dict[str, Any]]:
         if not candidates:
@@ -1164,6 +1345,7 @@ class VideoPipeline:
             "make": "Unknown",
             "model": "",
             "color": "",
+            "plate_crop": best_vote.get("region"),
             "source": source,
         }
 
@@ -1213,7 +1395,7 @@ class VideoPipeline:
         if vehicle_crop.size == 0 or self.paddle_ocr_reader is None:
             return None
 
-        candidates: Dict[str, Dict[str, float]] = {}
+        candidates: Dict[str, PlateVote] = {}
         for region, region_confidence in self._candidate_plate_regions(vehicle_crop):
             variants = self._prepare_plate_variants(region)
             paddle_inputs = [region]
@@ -1235,7 +1417,7 @@ class VideoPipeline:
                         continue
                     if confidence < LOCAL_OCR_MIN_CONFIDENCE:
                         continue
-                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence)
+                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence, region)
 
         result = self._finalize_local_vote(candidates, "paddle")
         if result and result["confidence"] >= PADDLE_PRIMARY_MIN_CONFIDENCE:
@@ -1317,6 +1499,7 @@ class VideoPipeline:
             "make": make.capitalize(),
             "model": model.capitalize() if model != "Unknown" else "",
             "color": color.capitalize() if color != "Unknown" else "",
+            "plate_crop": self._best_plate_crop_from_vehicle(vehicle_crop),
             "source": "cloud",
         }
 
@@ -1324,7 +1507,7 @@ class VideoPipeline:
         if vehicle_crop.size == 0 or self.ocr_reader is None:
             return None
 
-        candidates: Dict[str, Dict[str, float]] = {}
+        candidates: Dict[str, PlateVote] = {}
         for region, region_confidence in self._candidate_plate_regions(vehicle_crop):
             # Reference approach: plain grayscale first (AarohiSingla/ANPR), then enhanced variants
             raw_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY) if region.ndim == 3 else region
@@ -1347,23 +1530,60 @@ class VideoPipeline:
                     normalized = normalize_plate_text(raw_text)
                     if not normalized or confidence < LOCAL_OCR_MIN_CONFIDENCE:
                         continue
-                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence)
+                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence, region)
 
         return self._finalize_local_vote(candidates, "easyocr")
 
-    def _extract_plate_and_mmc(self, vehicle_crop) -> Optional[Dict[str, Any]]:
-        paddle_result = self._extract_plate_paddle(vehicle_crop)
-        if paddle_result and paddle_result.get("confidence", 0.0) >= PADDLE_PRIMARY_MIN_CONFIDENCE:
-            return paddle_result
+    @staticmethod
+    def _merge_plate_results(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(primary)
+        if str(primary.get("text") or "") == str(secondary.get("text") or ""):
+            merged["confidence"] = round(
+                max(float(primary.get("confidence") or 0.0), float(secondary.get("confidence") or 0.0)),
+                3,
+            )
+            merged["source"] = f"{primary.get('source', 'unknown')}+{secondary.get('source', 'unknown')}"
+            if not merged.get("plate_crop") and secondary.get("plate_crop") is not None:
+                merged["plate_crop"] = secondary.get("plate_crop")
+            return merged
+        return secondary if float(secondary.get("confidence") or 0.0) > float(primary.get("confidence") or 0.0) else primary
 
+    def _extract_plate_and_mmc(self, vehicle_crop) -> Optional[Dict[str, Any]]:
+        """
+        Primary ANPR path.
+
+        Preference order (when cloud API is available):
+        1. Plate Recognizer cloud result above CLOUD_OCR_MIN_CONFIDENCE
+        2. Merged Paddle + EasyOCR local result
+        3. Paddle-only
+        4. EasyOCR-only
+        5. Cloud result below threshold (last-resort fallback)
+        """
+        cloud_result = self._extract_plate_cloud(vehicle_crop)
+        cloud_conf = float((cloud_result or {}).get("confidence") or 0.0)
+        if cloud_result and cloud_conf >= CLOUD_OCR_MIN_CONFIDENCE:
+            return cloud_result
+
+        paddle_result = self._extract_plate_paddle(vehicle_crop)
         easy_result = self._extract_plate_local(vehicle_crop)
-        if easy_result and (not paddle_result or easy_result.get("confidence", 0.0) > paddle_result.get("confidence", 0.0)):
-            return easy_result
+
+        if paddle_result and easy_result:
+            merged = self._merge_plate_results(paddle_result, easy_result)
+            if float(merged.get("confidence") or 0.0) >= PADDLE_PRIMARY_MIN_CONFIDENCE:
+                return merged
+            return merged
 
         if paddle_result:
             return paddle_result
 
-        return self._extract_plate_cloud(vehicle_crop)
+        if easy_result:
+            return easy_result
+
+        # If we had a weak cloud result but no usable local result, fall back to it.
+        if cloud_result:
+            return cloud_result
+
+        return None
 
     @staticmethod
     def _strip_json_fence(raw_text: str) -> str:
@@ -1596,6 +1816,9 @@ class VideoPipeline:
             "effective_sahi_interval": self._effective_sahi_interval,
             "effective_heavy_validator_interval": self._effective_heavy_interval,
             "effective_rtdetr_interval": self._effective_rtdetr_interval,
+            "detection_confidence": round(self.detection_confidence, 3),
+            "plate_confidence": round(self.plate_confidence, 3),
+            "face_match_threshold": round(self.face_match_threshold, 3),
             "warnings": warnings,
         }
 
@@ -1738,10 +1961,14 @@ class VideoPipeline:
                 mmc_data.get("model", ""),
                 mmc_data.get("color", ""),
             )
+            now = time.time()
+            plate_crop = mmc_data.get("plate_crop")
+            if plate_crop is None or getattr(plate_crop, "size", 0) == 0:
+                plate_crop = self._best_plate_crop_from_vehicle(vehicle_crop)
+            vehicle_snapshot_url = self._save_snapshot(VEHICLE_SNAPSHOT_DIR, "vehicle", vehicle_crop, tracker_id, now)
+            plate_snapshot_url = self._save_snapshot(PLATE_SNAPSHOT_DIR, "plate", plate_crop, tracker_id, now)
 
             with self.state_lock:
-                now = time.time()
-                
                 # 1. Vote on Plate Text
                 vote_bucket = self.plate_votes.setdefault(tracker_id, {})
                 vote = vote_bucket.setdefault(
@@ -1771,6 +1998,9 @@ class VideoPipeline:
                 
                 # 3. Check Confirmations
                 plate_confirmed = self._is_plate_vote_confirmed(best_vote)
+                # Safety: never confirm a plate unless we have a usable crop saved
+                if plate_confirmed and not plate_snapshot_url:
+                    plate_confirmed = False
                 
                 # MMC consensus: require at least 2 hits if we have low confidence, or just take the best after 1 if plate is confirmed.
                 # However, for stability, we'll prefer the most frequent MMC.
@@ -1784,10 +2014,16 @@ class VideoPipeline:
                         "pending_plates",
                         {
                             "tracker_id": tracker_id,
+                            "plate_text": best_text,
                             "candidate_text": best_text,
                             "hits": int(best_vote["hits"]),
                             "confidence": round(best_vote["best_confidence"], 3),
-                            "source": mmc_data.get("source", "unknown"),
+                            "status": "PENDING",
+                            "ocr_source": mmc_data.get("source", "unknown"),
+                            "camera_id": self.camera_id,
+                            "first_seen": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                            "snapshot_url": plate_snapshot_url,
+                            "vehicle_image": vehicle_snapshot_url,
                             "time": self._format_clock(),
                         },
                         "tracker_id",
@@ -1827,6 +2063,8 @@ class VideoPipeline:
                     "make": v_make,
                     "model": v_model,
                     "color": v_color,
+                    "snapshot_url": plate_snapshot_url,
+                    "vehicle_image": vehicle_snapshot_url,
                     "expires": now + 8.0,
                 }
                 self._push_recent(
@@ -1837,7 +2075,17 @@ class VideoPipeline:
                         "plate_text": best_text,
                         "vehicle_type": vehicle_type_enriched,
                         "confidence": round(best_vote["best_confidence"], 3),
+                        "status": "CONFIRMED",
                         "ocr_source": mmc_data.get("source", "unknown"),
+                        "camera_id": self.camera_id,
+                        "first_seen": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                        "last_seen": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
+                        "snapshot_url": plate_snapshot_url,
+                        "vehicle_image": vehicle_snapshot_url,
+                        "plate_image": plate_snapshot_url,
+                        "make": v_make,
+                        "model": v_model,
+                        "color": v_color,
                         "time": self._format_clock(),
                     }, "plate"),
                     "plate_text",
@@ -1850,7 +2098,13 @@ class VideoPipeline:
                         "vehicle_type": vehicle_type_enriched,
                         "plate_text": best_text,
                         "confidence": round(best_vote["best_confidence"], 3),
+                        "camera_id": self.camera_id,
                         "ocr_source": mmc_data.get("source", "unknown"),
+                        "snapshot_url": vehicle_snapshot_url,
+                        "vehicle_image": vehicle_snapshot_url,
+                        "make": v_make,
+                        "model": v_model,
+                        "color": v_color,
                         "time": self._format_clock(),
                     }, "vehicle"),
                     "tracker_id",
@@ -1919,9 +2173,15 @@ class VideoPipeline:
             embedding = getattr(best_face, "embedding", None)
             match_name = self._match_watchlist(embedding)
             watchlist_hit = bool(match_name)
+            detector_confidence = getattr(best_face, "det_score", None)
+            face_confidence = float(detector_confidence) if isinstance(detector_confidence, (int, float)) else None
+            now = time.time()
+            face_crop = upper_crop[max(fy, 0):max(fy2, 0), max(fx, 0):max(fx2, 0)].copy() if upper_crop.size else upper_crop
+            if getattr(face_crop, "size", 0) == 0:
+                face_crop = upper_crop
+            face_snapshot_url = self._save_snapshot(FACE_SNAPSHOT_DIR, "face", face_crop, tracker_id, now)
 
             with self.state_lock:
-                now = time.time()
                 cached_face = self.face_results.get(tracker_id)
                 previous_gender = cached_face.get("gender") if cached_face else None
                 is_new_face = tracker_id not in self.analyzed_face_track_ids
@@ -1930,6 +2190,8 @@ class VideoPipeline:
                     "age": age,
                     "match_name": match_name,
                     "watchlist_hit": watchlist_hit,
+                    "confidence": face_confidence,
+                    "snapshot_url": face_snapshot_url,
                     "face_box": (abs_left, abs_top, abs_right, abs_bottom),
                     "expires": now + 8.0,
                 }
@@ -1946,7 +2208,12 @@ class VideoPipeline:
                     "identity": match_name or "Anonymous",
                     "gender": gender,
                     "age": age,
+                    "camera_id": self.camera_id,
+                    "confidence": face_confidence,
                     "watchlist_hit": watchlist_hit,
+                    "snapshot_url": face_snapshot_url,
+                    "image": face_snapshot_url,
+                    "first_seen": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"),
                     "time": self._format_clock(),
                 }
                 if watchlist_hit or is_new_face:
@@ -2322,6 +2589,9 @@ class VideoPipeline:
             state["effective_sahi_interval"] = status["effective_sahi_interval"]
             state["effective_heavy_validator_interval"] = status["effective_heavy_validator_interval"]
             state["effective_rtdetr_interval"] = status["effective_rtdetr_interval"]
+            state["detection_confidence"] = status["detection_confidence"]
+            state["plate_confidence"] = status["plate_confidence"]
+            state["face_match_threshold"] = status["face_match_threshold"]
 
             if time.time() - self.last_metric_write >= METRIC_WRITE_INTERVAL_SECONDS:
                 self.last_metric_write = time.time()

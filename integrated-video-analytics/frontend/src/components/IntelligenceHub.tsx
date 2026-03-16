@@ -28,6 +28,7 @@ function StatusBadge({ status }: { status: string }) {
     ANPR_ALERT: "bg-status-alert/20 border-status-alert/50 text-status-alert",
     FOLLOW_LOG: "bg-secondary/20 border-secondary/50 text-secondary",
     CLEARED: "bg-status-online/20 border-status-online/50 text-status-online",
+    PENDING: "bg-status-warning/20 border-status-warning/50 text-status-warning",
   };
   const cls = colorMap[status] || "bg-muted/20 border-border text-muted-foreground";
   return (
@@ -88,10 +89,14 @@ function FaceCard({ detection, onClick }: { detection: any; onClick?: () => void
 }
 
 function PlateCard({ detection, onClick }: { detection: any; onClick?: () => void }) {
-  const isThreat = detection.status === "STOLEN" || detection.status === "INTERCEPT_ORDER";
+  const status = detection.status || (detection.pending ? "PENDING" : "CONFIRMED");
+  const isThreat = status === "STOLEN" || status === "INTERCEPT_ORDER";
   const confidence = detection.confidence ?? 0.9;
   return (
-    <div className={`group relative border p-2.5 transition-all duration-300 animate-card-slide ${isThreat ? "border-status-alert/60 bg-status-alert/5" : "border-border/40 bg-surface hover:border-primary/50"}`}>
+    <div
+      onClick={onClick}
+      className={`group relative border p-2.5 cursor-pointer transition-all duration-300 animate-card-slide ${isThreat ? "border-status-alert/60 bg-status-alert/5" : status === "PENDING" ? "border-status-warning/50 bg-status-warning/5 hover:border-status-warning" : "border-border/40 bg-surface hover:border-primary/50"}`}
+    >
       {isThreat && <div className="absolute top-0 left-0 w-full h-px bg-status-alert shadow-[0_0_8px_hsl(var(--status-alert))]" />}
       <div className="flex justify-between items-center mb-1.5">
         <div className="flex items-center gap-1.5">
@@ -109,15 +114,16 @@ function PlateCard({ detection, onClick }: { detection: any; onClick?: () => voi
         <div><span className="text-primary/50">MAKE:</span> {detection.make || detection.vehicle_type || "N/A"}</div>
         <div><span className="text-primary/50">MODEL:</span> {detection.model || "N/A"}</div>
         <div><span className="text-primary/50">COLOR:</span> {detection.color || "N/A"}</div>
-        <div><span className="text-primary/50">YEAR:</span> {detection.year || "N/A"}</div>
+        <div><span className="text-primary/50">OCR:</span> {detection.ocr_source || detection.source || "N/A"}</div>
         {detection.origin && <div className="col-span-2"><span className="text-primary/50">REG:</span> {detection.origin}</div>}
+        {typeof detection.hits === "number" && <div className="col-span-2"><span className="text-primary/50">HITS:</span> {detection.hits}</div>}
       </div>
       <div className="flex items-center justify-between mt-1.5">
         <ConfidenceBar value={confidence} />
       </div>
       <div className="flex justify-between items-center mt-1">
         <span className="text-[8px] font-mono text-muted-foreground">OCR_CONF: {(confidence * 100).toFixed(1)}%</span>
-        {detection.status && <StatusBadge status={detection.status} />}
+        <StatusBadge status={status} />
       </div>
     </div>
   );
@@ -178,7 +184,12 @@ function CrowdPanel({ state }: { state: CyberShieldState }) {
         <div className="text-[9px] font-mono text-muted-foreground uppercase mb-2 tracking-widest">Gender Analytics</div>
         {Object.entries(genders).map(([gender, count]: [string, any]) => {
           const pct = Math.round((count / total) * 100);
-          const gColor = gender === "Male" ? "bg-primary" : gender === "Female" ? "bg-secondary" : "bg-muted-foreground";
+          const normalizedGender = gender.toLowerCase();
+          const gColor = normalizedGender === "male" || normalizedGender === "man"
+            ? "bg-primary"
+            : normalizedGender === "female" || normalizedGender === "woman"
+              ? "bg-secondary"
+              : "bg-muted-foreground";
           return (
             <div key={gender} className="flex items-center gap-2 mb-2">
               <div className={`w-2 h-2 rounded-full ${gColor}`} />
@@ -218,7 +229,13 @@ export function IntelligenceHub({ state, onFaceClick, onPlateClick }: Intelligen
   const [activeTab, setActiveTab] = useState<TabKey>("faces");
 
   const faces = state.recent_faces || [];
-  const plates = state.recent_plates || [];
+  const pendingPlates = (state.pending_plates || []).map((item: any) => ({
+    ...item,
+    pending: true,
+    plate_text: item.plate_text || item.candidate_text,
+    status: item.status || "PENDING",
+  }));
+  const plates = [...pendingPlates, ...(state.recent_plates || [])].slice(0, 10);
   const vehicles = state.recent_vehicles || [];
   const logs = state.event_logs || [];
   const processedCount = state.vehicle_count + state.people_count;

@@ -194,6 +194,16 @@ def store_metric(camera_id: str, vehicle_count: int, people_count: int, zone_cou
     _run_write(action, "store_metric")
 
 
+def clear_events(camera_id: Optional[str] = None) -> None:
+    def action(conn: sqlite3.Connection) -> None:
+        if camera_id:
+            conn.execute("DELETE FROM events WHERE camera_id = ?", (camera_id,))
+        else:
+            conn.execute("DELETE FROM events")
+
+    _run_write(action, "clear_events")
+
+
 def upsert_vehicle_record(
     camera_id: str,
     tracker_id: int,

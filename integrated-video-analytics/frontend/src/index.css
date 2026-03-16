@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -75,10 +73,10 @@
 
 @layer utilities {
   .font-mono-tactical {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'JetBrains Mono', 'Cascadia Mono', 'Consolas', monospace;
   }
   .font-sans-tactical {
-    font-family: 'IBM Plex Sans', sans-serif;
+    font-family: Inter, 'Segoe UI', Arial, sans-serif;
   }
   .text-tactical {
     @apply text-[10px] uppercase tracking-[0.15em] font-mono-tactical;
@@ -129,8 +127,11 @@
     bottom: -50%;
     width: 200%;
     height: 200%;
-    background: transparent url('http://assets.iceablethemes.com/img/noise-transparent.png') repeat 0 0;
-    background-repeat: repeat;
+    background-image:
+      radial-gradient(circle at 20% 20%, rgba(255,255,255,0.025) 0, rgba(255,255,255,0.025) 1px, transparent 1px),
+      radial-gradient(circle at 80% 30%, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) 1px, transparent 1px),
+      radial-gradient(circle at 40% 70%, rgba(255,255,255,0.018) 0, rgba(255,255,255,0.018) 1px, transparent 1px);
+    background-size: 18px 18px, 24px 24px, 32px 32px;
     animation: shift 0.2s infinite;
     opacity: .04;
     visibility: visible;

@@ -4,7 +4,7 @@ Full documentation, setup instructions, system architecture, and API reference a
 
 ## Latest session note
 
-Recent implementation updates include React frontend integration under `frontend/`, backend static serving from `static_ui/`, API wiring cleanup, OCR/ReID/runtime hardening, and frontend build/type compatibility fixes.
+Recent implementation updates include React frontend integration under `frontend/`, backend static serving from `static_ui/`, API/auth hardening, OCR/ReID/runtime hardening, ANPR snapshot visibility, and frontend build/type compatibility fixes.
 
 For a comprehensive verified implementation ledger (including backend, frontend, dependency, build, and test details), see [context.md](../context.md).
 
@@ -50,6 +50,7 @@ python -m pytest tests/ -v
 - Plate detection uses `https://huggingface.co/yasirfaizahmed/license-plate-object-detection/resolve/main/best.pt` by default and can be overridden with `CYBERSHIELD_PLATE_MODEL`.
 - The ANPR pipeline runs local OCR first (`PaddleOCR` primary, `EasyOCR` fallback), then uses cloud OCR only when local OCR cannot produce a valid plate.
 - If `PLATE_RECOGNIZER_API_TOKEN` is set, cloud OCR is used as a last-resort fallback and optional enrichment path, not as the primary recognition path.
+- Pending and confirmed ANPR reads are surfaced in the React UI, and confirmed reads include vehicle and plate crop snapshots for review.
 - Watchlist identities can be managed from the dashboard or by placing images inside `watchlist/`.
 
 ## Setup
@@ -101,7 +102,7 @@ Open `http://localhost:8080`.
 - `CYBERSHIELD_ADAPTIVE_MAX_INFER_MS`: Inference latency budget used for governor pressure detection
 - `CYBERSHIELD_ADAPTIVE_HYSTERESIS_FRAMES`: Number of consecutive frames before mode switch to avoid oscillation
 - `CYBERSHIELD_ENABLE_OSINT_REID`: Enables post-ByteTrack OSINT tracklet collection and async enrichment
-- `ADMIN_API_TOKEN`: Required bearer token for protected writes (`POST /api/watchlist`, `POST /api/tracklet/{id}/enrich`)
+- `ADMIN_API_TOKEN`: Protects write routes plus live streams, snapshots, exports, and analytics websockets when configured
 - `MIN_TRACKLET_FRAMES`: Minimum frames required before OSINT enrichment dispatch
 - `WORKER_POOL_SIZE`: Thread pool size for async enrichment workers
 - `ENABLE_SAHI`: Toggle SAHI in OSINT validator tests
@@ -118,7 +119,7 @@ The repository now includes OSINT identity continuity and vehicle enrichment mod
 - ReID worker using OSNet (`torchreid`) and face embeddings via InsightFace (`buffalo_l`)
 - Tracklet aggregation and persistence into `tracklets`
 - Cross-camera matcher with multimodal score fusion and ambiguity incident generation
-- Vehicle make/model classification via EfficientNet-B0 (`timm`) and HSV-based color classification
+- Vehicle make/model classification via the Stanford Cars transformer pipeline plus HSV-based color classification
 - FastAPI endpoints for watchlist, incidents, tracklets, enrich trigger, snapshots, and worker queue metrics
 
 ### Migration
@@ -140,6 +141,8 @@ curl http://localhost:8080/api/watchlist
 curl http://localhost:8080/api/records/tracklets
 curl http://localhost:8080/api/metrics/worker_queue
 ```
+
+If `ADMIN_API_TOKEN` is configured, use `Authorization: Bearer <token>` or `X-API-Key: <token>` for protected writes, streams, snapshot fetches, exports, and websocket subscriptions.
 
 ### Protected API calls (PowerShell)
 
@@ -165,7 +168,7 @@ python osint_reid/sahi_rtdetr_test.py
 
 ## Maltego export
 
-- Dashboard button: `Export Maltego Graph`
+- Analytics view buttons: `Export Plates`, `Export Faces`, `Export Vehicles`, `Export Events`
 - API route: `/api/export/maltego?camera_id=<id>&entity=faces|vehicles|plates|events&limit=1000`
 - Output format: CSV, suitable for transform staging/import workflows.
 

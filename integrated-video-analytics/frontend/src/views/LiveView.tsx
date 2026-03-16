@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo } from "react";
-import { Plus, Pause, Camera as CameraIcon, Trash2, LayoutGrid, Maximize2 } from "lucide-react";
+import { useState, useCallback, useEffect, useMemo } from "react";
+import { Pause, Camera as CameraIcon, Trash2, LayoutGrid, Maximize2 } from "lucide-react";
 import { CyberShieldState } from "@/pages/Index";
 import { CameraGrid } from "@/components/live/CameraGrid";
 import { VideoPlayer } from "@/components/VideoPlayer";
@@ -35,6 +35,12 @@ export function LiveView({ cameras, activeCamera, state, onSwitchCamera, onAddFe
     onSwitchCamera(id);
     setLayout("focus");
   }, [onSwitchCamera]);
+
+  useEffect(() => {
+    if (state.stream_profile) {
+      setStreamProfile(state.stream_profile as "low" | "balanced" | "high");
+    }
+  }, [activeCamera, state.stream_profile]);
 
   const handleRemoveCamera = async () => {
     if (!activeCamera) return;

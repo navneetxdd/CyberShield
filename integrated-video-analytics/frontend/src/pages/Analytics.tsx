@@ -1,13 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend
-} from "recharts";
+import { getConfig } from "@/lib/config";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const RANGES = ["1H", "6H", "24H", "ALL"] as const;
 type Range = typeof RANGES[number];
-
 
 const TOOLTIP_STYLE = {
   backgroundColor: "#0a0a0f",
@@ -19,16 +17,23 @@ const TOOLTIP_STYLE = {
 
 const DARK_LABEL_STYLE = { fill: "#4b5563", fontFamily: "monospace", fontSize: 10 };
 
-export default function Analytics() {
+interface AnalyticsProps {
+  cameraId?: string;
+}
+
+export default function Analytics({ cameraId }: AnalyticsProps) {
   const [range, setRange] = useState<Range>("6H");
   const [history, setHistory] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
   const [plates, setPlates] = useState<any[]>([]);
+  const [faces, setFaces] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
   const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let isActive = true;
+    let active = true;
     setLoading(true);
     setError(null);
 
@@ -39,49 +44,73 @@ export default function Analytics() {
       "ALL": 5000,
     };
     const limit = limitByRange[range];
+    const cameraQuery = cameraId ? `&camera_id=${encodeURIComponent(cameraId)}` : "";
 
-    const fetchMetrics = apiFetch<any>(`/api/metrics?limit=${limit}`)
-      .then(d => {
-        if (!isActive) return;
-        const metrics = Array.isArray(d?.history) ? d.history : [];
+    Promise.all([
+      apiFetch(`/api/metrics?limit=${limit}${cameraQuery}`) as Promise<any>,
+      apiFetch(`/api/analytics/summary?${cameraId ? `camera_id=${encodeURIComponent(cameraId)}` : ""}`) as Promise<any>,
+      apiFetch(`/api/records/plates?limit=100${cameraQuery}`) as Promise<any>,
+      apiFetch(`/api/records/faces?limit=100${cameraQuery}`) as Promise<any>,
+      apiFetch(`/api/records/vehicles?limit=100${cameraQuery}`) as Promise<any>,
+    ])
+      .then(([metricsData, summaryData, plateData, faceData, vehicleData]) => {
+        if (!active) return;
+        const metrics = Array.isArray(metricsData?.history) ? metricsData.history : [];
         setHistory(metrics.map((item: any) => ({
           bucket: item.timestamp ? new Date(item.timestamp).toLocaleTimeString("en-GB", { hour12: false }) : "",
-          avg_vehicles: Number(item.vehicle_count || 0),
-          avg_people: Number(item.people_count || 0),
-          avg_zone: Number(item.zone_count || 0),
-          max_vehicles: Number(item.vehicle_count || 0),
-          max_people: Number(item.people_count || 0),
+          vehicles: Number(item.vehicle_count || 0),
+          people: Number(item.people_count || 0),
+          zone: Number(item.zone_count || 0),
         })));
-      });
-
-    const fetchPlates = apiFetch<any>(`/api/records/plates?limit=100`)
-      .then(d => {
-        if (!isActive) return;
-        setPlates(Array.isArray(d?.records) ? d.records : []);
-      });
-
-    Promise.all([fetchMetrics, fetchPlates])
-      .catch((err) => {
-        if (!isActive) return;
-        console.error("Analytics fetch error", err);
+        setSummary(summaryData?.summary || null);
+        setPlates(Array.isArray(plateData?.records) ? plateData.records : []);
+        setFaces(Array.isArray(faceData?.records) ? faceData.records : []);
+        setVehicles(Array.isArray(vehicleData?.records) ? vehicleData.records : []);
+      })
+      .catch(() => {
+        if (!active) return;
         setError("Failed to load analytics from backend.");
       })
       .finally(() => {
-        if (isActive) setLoading(false);
+        if (active) setLoading(false);
       });
 
-    return () => { isActive = false; };
-  }, [range]);
+    return () => {
+      active = false;
+    };
+  }, [cameraId, range]);
 
-  const filteredPlates = useMemo(() =>
-    plates.filter(p =>
-      String(p.plate_text || "").toLowerCase().includes(search.toLowerCase()) ||
-      String(p.vehicle_type || "").toLowerCase().includes(search.toLowerCase())
-    ), [plates, search]);
+  const filteredPlates = useMemo(
+    () => plates.filter((plate) => `${plate.plate_text} ${plate.vehicle_type}`.toLowerCase().includes(search.toLowerCase())),
+    [plates, search],
+  );
+  const filteredFaces = useMemo(
+    () => faces.filter((face) => `${face.identity || ""} ${face.gender || ""}`.toLowerCase().includes(search.toLowerCase())),
+    [faces, search],
+  );
+  const filteredVehicles = useMemo(
+    () => vehicles.filter((vehicle) => `${vehicle.vehicle_type || ""} ${vehicle.plate_text || ""}`.toLowerCase().includes(search.toLowerCase())),
+    [vehicles, search],
+  );
+
+  const exportMaltego = async (entity: "faces" | "vehicles" | "plates" | "events") => {
+    const config = getConfig();
+    const qs = new URLSearchParams({
+      entity,
+      limit: "1000",
+    });
+    if (cameraId) qs.set("camera_id", cameraId);
+    if (config.API_KEY) qs.set("api_key", config.API_KEY);
+    const response = await fetch(`${config.API_URL}/api/export/maltego?${qs.toString()}`);
+    const blob = await response.blob();
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `maltego_${entity}_${Date.now()}.csv`;
+    anchor.click();
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground font-mono p-4 space-y-4">
-      {/* Header */}
       <header className="flex items-center justify-between border border-border bg-panel px-4 py-2">
         <div className="flex items-center gap-4">
           <div className="w-2 h-2 bg-primary glow-cyan" />
@@ -89,13 +118,13 @@ export default function Analytics() {
         </div>
         <div className="flex items-center gap-3">
           <div className="flex gap-1">
-            {RANGES.map(r => (
+            {RANGES.map((item) => (
               <button
-                key={r}
-                onClick={() => setRange(r)}
-                className={`px-3 py-1 text-[10px] font-mono uppercase tracking-widest border transition-all ${range === r ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30"}`}
+                key={item}
+                onClick={() => setRange(item)}
+                className={`px-3 py-1 text-[10px] font-mono uppercase tracking-widest border transition-all ${range === item ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/30"}`}
               >
-                {r}
+                {item}
               </button>
             ))}
           </div>
@@ -114,33 +143,32 @@ export default function Analytics() {
         <div className="text-center text-[12px] font-mono text-status-alert py-20">{error}</div>
       ) : (
         <>
-          {/* Chart 1 — Vehicles */}
+          {summary && (
+            <div className="grid grid-cols-5 gap-4">
+              {[
+                ["Vehicles", summary.total_vehicles],
+                ["People", summary.total_people],
+                ["Plates", summary.total_plates],
+                ["Faces", summary.total_faces],
+                ["Watchlist Hits", summary.watchlist_hits],
+              ].map(([label, value]) => (
+                <div key={label as string} className="border border-border bg-panel p-4">
+                  <div className="text-[9px] font-mono text-muted-foreground uppercase">{label}</div>
+                  <div className="text-[24px] font-mono text-foreground font-bold mt-2">{value as number}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="border border-border bg-panel p-4">
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest mb-3">◻ MODULE 1: Vehicle Count</div>
-            <ResponsiveContainer width="100%" height={160}>
+            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest mb-3">Realtime Metrics</div>
+            <ResponsiveContainer width="100%" height={180}>
               <AreaChart data={history} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="gradV" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.15} />
                     <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
                   </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="bucket" tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
-                <YAxis tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Area type="monotone" dataKey="avg_vehicles" stroke="#38bdf8" fill="url(#gradV)" strokeWidth={2} name="Avg Vehicles" />
-                <Area type="monotone" dataKey="max_vehicles" stroke="#38bdf8" fill="none" strokeDasharray="4 2" strokeWidth={1} strokeOpacity={0.4} name="Max Vehicles" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Chart 2 — People */}
-          <div className="border border-border bg-panel p-4">
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest mb-3">◉ MODULE 4: People Count</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <AreaChart data={history} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <defs>
                   <linearGradient id="gradP" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#818cf8" stopOpacity={0.15} />
                     <stop offset="95%" stopColor="#818cf8" stopOpacity={0} />
@@ -150,84 +178,85 @@ export default function Analytics() {
                 <XAxis dataKey="bucket" tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
                 <YAxis tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Area type="monotone" dataKey="avg_people" stroke="#818cf8" fill="url(#gradP)" strokeWidth={2} name="Avg People" />
-                <Area type="monotone" dataKey="max_people" stroke="#818cf8" fill="none" strokeDasharray="4 2" strokeWidth={1} strokeOpacity={0.4} name="Max People" />
+                <Area type="monotone" dataKey="vehicles" stroke="#38bdf8" fill="url(#gradV)" strokeWidth={2} name="Vehicles" />
+                <Area type="monotone" dataKey="people" stroke="#818cf8" fill="url(#gradP)" strokeWidth={2} name="People" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
 
-          {/* Chart 3 — Zone Occupancy */}
-          <div className="border border-border bg-panel p-4">
-            <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest mb-3">⬡ Zone Occupancy</div>
-            <ResponsiveContainer width="100%" height={140}>
-              <AreaChart data={history} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gradZ" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#fbbf24" stopOpacity={0.15} />
-                    <stop offset="95%" stopColor="#fbbf24" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="bucket" tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
-                <YAxis tick={DARK_LABEL_STYLE} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Area type="monotone" dataKey="avg_zone" stroke="#fbbf24" fill="url(#gradZ)" strokeWidth={2} name="Zone Occupancy" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* ANPR Records Table */}
-          <div className="border border-border bg-panel p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">◻ MODULE 2: ANPR Records ({filteredPlates.length})</div>
-              <input
-                className="bg-background border border-border text-foreground text-[10px] font-mono px-2 py-1 w-48 outline-none focus:border-primary"
-                placeholder="Search plate / vehicle..."
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-              />
+          <div className="border border-border bg-panel p-4 space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Historical Records</div>
+              <div className="flex items-center gap-2">
+                <input
+                  className="bg-background border border-border text-foreground text-[10px] font-mono px-2 py-1 w-48 outline-none focus:border-primary"
+                  placeholder="Search records..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {(["plates", "faces", "vehicles", "events"] as const).map((entity) => (
+                  <button
+                    key={entity}
+                    onClick={() => exportMaltego(entity)}
+                    className="px-3 py-1 border border-border text-[9px] font-mono uppercase text-muted-foreground hover:text-foreground hover:border-primary/40 transition-all"
+                  >
+                    EXPORT {entity.toUpperCase()}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[10px] font-mono">
-                <thead>
-                  <tr className="border-b border-border/40">
-                    {["PLATE", "VEHICLE TYPE", "CONFIDENCE", "FIRST SEEN", "LAST SEEN", "STATUS"].map(h => (
-                      <th key={h} className="text-left py-1.5 px-2 text-muted-foreground uppercase tracking-widest font-normal">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPlates.map((p, i) => (
-                    <tr key={i} className={`border-b border-border/20 ${i % 2 === 0 ? "bg-white/[0.01]" : ""} hover:bg-primary/5 transition-colors`}>
-                      <td className="py-1.5 px-2 text-foreground font-bold tracking-[0.15em]">{p.plate_text}</td>
-                      <td className="py-1.5 px-2 text-muted-foreground">{p.vehicle_type}</td>
-                      <td className="py-1.5 px-2">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 bg-muted/10 h-1.5">
-                            <div className="h-full bg-primary transition-all" style={{ width: `${p.confidence * 100}%` }} />
-                          </div>
-                          <span className="text-foreground">{(p.confidence * 100).toFixed(1)}%</span>
-                        </div>
-                      </td>
-                      <td className="py-1.5 px-2 text-muted-foreground">{p.first_seen}</td>
-                      <td className="py-1.5 px-2 text-muted-foreground">{p.last_seen}</td>
-                      <td className="py-1.5 px-2">
-                        {(() => {
-                          const status = p.status || (p.confidence >= 0.9 ? "CONFIRMED" : "PENDING");
-                          return (
-                            <span className={`text-[9px] px-1 py-0.5 border ${
-                              status === "STOLEN" ? "border-status-alert/50 text-status-alert" :
-                              status === "FLAGGED" ? "border-status-warning/50 text-status-warning" :
-                              status === "CONFIRMED" ? "border-status-online/50 text-status-online" :
-                              "border-status-warning/50 text-status-warning"
-                            }`}>{status}</span>
-                          );
-                        })()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="border border-border/40">
+                <div className="px-3 py-2 border-b border-border/40 text-[9px] font-mono text-muted-foreground uppercase">ANPR Records</div>
+                <div className="max-h-[360px] overflow-auto">
+                  <table className="w-full text-[10px] font-mono">
+                    <tbody>
+                      {filteredPlates.map((plate, index) => (
+                        <tr key={`${plate.plate_text}-${index}`} className="border-b border-border/20">
+                          <td className="px-3 py-2 text-foreground">{plate.plate_text}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{plate.vehicle_type}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{plate.last_seen}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="border border-border/40">
+                <div className="px-3 py-2 border-b border-border/40 text-[9px] font-mono text-muted-foreground uppercase">Face Records</div>
+                <div className="max-h-[360px] overflow-auto">
+                  <table className="w-full text-[10px] font-mono">
+                    <tbody>
+                      {filteredFaces.map((face, index) => (
+                        <tr key={`${face.camera_id}-${face.tracker_id}-${index}`} className="border-b border-border/20">
+                          <td className="px-3 py-2 text-foreground">{face.identity || "Anonymous"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{face.gender || "--"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{face.watchlist_hit ? "WATCHLIST" : "OBSERVED"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="border border-border/40">
+                <div className="px-3 py-2 border-b border-border/40 text-[9px] font-mono text-muted-foreground uppercase">Vehicle Records</div>
+                <div className="max-h-[360px] overflow-auto">
+                  <table className="w-full text-[10px] font-mono">
+                    <tbody>
+                      {filteredVehicles.map((vehicle, index) => (
+                        <tr key={`${vehicle.camera_id}-${vehicle.tracker_id}-${index}`} className="border-b border-border/20">
+                          <td className="px-3 py-2 text-foreground">{vehicle.vehicle_type}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{vehicle.plate_text || "--"}</td>
+                          <td className="px-3 py-2 text-muted-foreground">{vehicle.last_seen}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </>

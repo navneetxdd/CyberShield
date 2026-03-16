@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { AlertTriangle, Plus, Download, ChevronDown, Bell, BellOff } from "lucide-react";
+import { useState, useEffect } from "react";
+import { AlertTriangle, Plus, Download, Bell, BellOff } from "lucide-react";
 import { CyberShieldState } from "../../pages/Index";
 import { CONFIG } from "../../lib/config";
 import { ViewType } from "./Sidebar";
@@ -29,6 +29,7 @@ function ModulePill({ label, active, demo }: { label: string; active: boolean; d
 export function TopBar({ state, activeCamera, alertCount, notificationsEnabled, onToggleNotifications, onNavigate, onOpenAddFeed, onOpenAlertHistory, onOpenSettings }: TopBarProps) {
   const [clock, setClock] = useState({ time: "", date: "" });
   const [isDownloading, setIsDownloading] = useState(false);
+  void onNavigate;
 
   useEffect(() => {
     const tick = () => {

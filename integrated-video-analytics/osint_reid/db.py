@@ -277,6 +277,19 @@ class OSINTDB:
         finally:
             conn.close()
 
+    def delete_global_identity(self, global_id: str) -> bool:
+        conn = self._connect()
+        try:
+            conn.execute(
+                "UPDATE tracklets SET resolved_global_id=NULL, last_updated=? WHERE resolved_global_id=?",
+                (now_utc_iso(), global_id),
+            )
+            cursor = conn.execute("DELETE FROM global_identities WHERE global_id=?", (global_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def create_incident(
         self,
         tracklet_id: str,
