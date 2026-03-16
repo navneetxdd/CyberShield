@@ -30,6 +30,7 @@ from database import (
 )
 from pipeline import get_system_health_snapshot, has_any_ocr_path, warm_shared_resources
 from runtime import CameraRuntime
+from vi_api import vi_router, vi_startup
 
 matplotlib.use("Agg")
 
@@ -350,6 +351,7 @@ async def lifespan(_: FastAPI):
             STARTUP_STATE["last_updated"] = int(time.time())
             await asyncio.to_thread(warm_shared_resources)
             STARTUP_STATE["preload_complete"] = True
+        await asyncio.to_thread(vi_startup)
         STARTUP_STATE["phase"] = "ready"
         STARTUP_STATE["ready"] = True
         STARTUP_STATE["last_updated"] = int(time.time())
@@ -404,6 +406,9 @@ def get_health_snapshot() -> dict:
 
 app = FastAPI(title="CyberShield AI Video Analytics", lifespan=lifespan)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Vehicle Intelligence Module router
+app.include_router(vi_router)
 
 app.add_middleware(
     CORSMiddleware,
