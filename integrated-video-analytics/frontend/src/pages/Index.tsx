@@ -6,6 +6,7 @@ import { WatchlistView } from "@/views/WatchlistView";
 import { SettingsView } from "@/views/SettingsView";
 import { OSINTView } from "@/views/OSINTView";
 import { WeaponsView } from "@/views/WeaponsView";
+import { PersonsView } from "@/views/PersonsView";
 import { AlertOverlay } from "@/components/AlertOverlay";
 import { AddFeedModal } from "@/components/modals/AddFeedModal";
 import { PlateDetailModal } from "@/components/modals/PlateDetailModal";
@@ -111,6 +112,7 @@ const Index = () => {
         case "w": setActiveView("watchlist"); break;
         case "o": setActiveView("osint"); break;
         case "x": setActiveView("weapons"); break;
+        case "p": setActiveView("persons"); break;
         case "n": setAddFeedOpen(true); break;
         case "escape": setAddFeedOpen(false); break;
         case "1": case "2": case "3": case "4": case "5":
@@ -218,6 +220,7 @@ const Index = () => {
         )}
         {activeView === "osint" && <OSINTView />}
         {activeView === "weapons" && <WeaponsView />}
+        {activeView === "persons" && <PersonsView />}
         {activeView === "settings" && <SettingsView />}
       </div>
 

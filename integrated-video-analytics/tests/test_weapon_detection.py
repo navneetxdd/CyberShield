@@ -96,6 +96,7 @@ def test_weapon_below_threshold_ignored(monkeypatch, tmp_path):
     vp.last_weapon_scan = 0.0
     vp.weapon_flash_until = 0.0
     vp._last_weapon_boxes = []
+    vp._last_weapon_logged = 0.0
     vp.state_lock = threading.RLock()
     vp.db_executor = concurrent.futures.ThreadPoolExecutor(1)
     vp.pending_db_futures = set()
@@ -147,6 +148,7 @@ def test_weapon_event_inserted(monkeypatch, tmp_path):
     vp.last_weapon_scan = 0.0
     vp.weapon_flash_until = 0.0
     vp._last_weapon_boxes = []
+    vp._last_weapon_logged = 0.0
     vp.state_lock = threading.RLock()
     vp.db_executor = concurrent.futures.ThreadPoolExecutor(1)
     vp.pending_db_futures = set()

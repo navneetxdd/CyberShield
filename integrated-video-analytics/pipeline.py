@@ -57,6 +57,7 @@ except ImportError:
     HAS_GEMINI = False
 
 from database import (
+    insert_helmet_event,
     insert_weapon_event,
     log_event,
     store_metric,
@@ -282,6 +283,9 @@ WEAPON_DETECT_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_DETECT_CONFIDENCE"
 WEAPON_SCAN_INTERVAL_SECONDS = read_env_float("CYBERSHIELD_WEAPON_SCAN_INTERVAL", 1.0, minimum=0.1, maximum=10.0)
 WEAPON_FRAME_SNAPSHOT_MAX_SIZE_KB = read_env_int("CYBERSHIELD_WEAPON_SNAPSHOT_KB", 50, minimum=10, maximum=500)
 
+ENABLE_HELMET_DETECT = read_env_bool("CYBERSHIELD_ENABLE_HELMET_DETECT", True)
+HELMET_DETECT_CONFIDENCE = read_env_float("CYBERSHIELD_HELMET_DETECT_CONFIDENCE", 0.45, minimum=0.05, maximum=0.95)
+
 DEFAULT_WEAPON_MODEL_URL = "yolo12m.pt"
 
 DETECTION_MODEL_NAME = resolve_model_path(
@@ -299,12 +303,18 @@ WEAPON_MODEL_NAME = resolve_model_path(
     BASE_DIR / "weights" / "weapon_best.pt",
     fallback=DEFAULT_WEAPON_MODEL_URL,
 )
+HELMET_MODEL_NAME = resolve_model_path(
+    os.getenv("CYBERSHIELD_HELMET_MODEL"),
+    BASE_DIR / "weights" / "helmet_best.pt",
+    fallback="yolov8n.pt",
+)
 
 
 class SharedResources:
     _detector: Optional[YOLO] = None
     _plate_detector: Optional[YOLO] = None
     _weapon_detector: Optional[YOLO] = None
+    _helmet_detector: Optional[YOLO] = None
     _face_analyzer = None
     _ocr_reader = None
     _paddle_ocr_reader = None
@@ -390,6 +400,22 @@ class SharedResources:
                     cls._set_initialization_error("weapon_detector", exc)
                     cls._weapon_detector = None
             return cls._weapon_detector
+
+    @classmethod
+    def get_helmet_detector(cls) -> Optional[YOLO]:
+        if not ENABLE_HELMET_DETECT:
+            return None
+        with cls.init_lock:
+            if cls._helmet_detector is None:
+                try:
+                    print(f"Loading helmet detector: {HELMET_MODEL_NAME}")
+                    cls._helmet_detector = YOLO(HELMET_MODEL_NAME)
+                    cls._clear_initialization_error("helmet_detector")
+                except Exception as exc:
+                    print(f"Helmet detector unavailable: {exc}")
+                    cls._set_initialization_error("helmet_detector", exc)
+                    cls._helmet_detector = None
+            return cls._helmet_detector
 
     @classmethod
     def get_heavy_validator(cls) -> Optional[YOLO]:
@@ -494,6 +520,7 @@ def warm_shared_resources() -> None:
     SharedResources.get_detector()
     SharedResources.get_plate_detector()
     SharedResources.get_weapon_detector()
+    SharedResources.get_helmet_detector()
     SharedResources.get_face_analyzer()
     SharedResources.get_paddle_ocr_reader()
     SharedResources.get_ocr_reader()
@@ -601,6 +628,7 @@ class VideoPipeline:
         self.detector = SharedResources.get_detector()
         self.plate_detector = SharedResources.get_plate_detector()
         self.weapon_detector = SharedResources.get_weapon_detector()
+        self.helmet_detector = SharedResources.get_helmet_detector()
         self.face_analyzer = SharedResources.get_face_analyzer()
 
         self.tracker = sv.ByteTrack(
@@ -638,6 +666,9 @@ class VideoPipeline:
         self.weapon_flash_until = 0.0
         self._last_weapon_boxes: list[dict] = []
         self._last_weapon_logged = 0.0  # timestamp of last DB insert (cooldown)
+        self.helmet_flash_until = 0.0
+        self._last_helmet_boxes: list[dict] = []
+        self._last_helmet_logged = 0.0  # timestamp of last helmet DB insert (cooldown)
         self.last_low_confidence_log: Dict[int, float] = {}
         self.rider_proxy_track_ids: Dict[int, float] = {}
         self._cached_watchlist_embeddings: Dict[str, Optional[np.ndarray]] = {}
@@ -1998,6 +2029,18 @@ class VideoPipeline:
                     detail = f"Face analytics completed for person #{tracker_id} ({gender})"
                     self._append_event(state, "Face Analytics", detail)
 
+            # Capture face snapshot JPEG on first detection
+            snapshot_blob: Optional[bytes] = None
+            if is_new_face:
+                try:
+                    face_crop_bgr = upper_crop[max(fy, 0):max(fy2, 0), max(fx, 0):max(fx2, 0)]
+                    if face_crop_bgr.size > 0:
+                        face_resized = cv2.resize(face_crop_bgr, (128, 128))
+                        _, enc = cv2.imencode(".jpg", face_resized, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        snapshot_blob = enc.tobytes()
+                except Exception:
+                    pass
+
             self._submit_db_task(
                 upsert_face_record,
                 self.camera_id,
@@ -2006,6 +2049,7 @@ class VideoPipeline:
                 gender,
                 age,
                 watchlist_hit,
+                snapshot_blob,
             )
         finally:
             with self.state_lock:
@@ -2144,6 +2188,22 @@ class VideoPipeline:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 3)
             self._draw_label(frame, label, (x1, max(y1 - 12, 20)), (0, 0, 255))
 
+    def _draw_helmet_overlay(self, frame) -> None:
+        """Draw no-helmet violation boxes on the frame."""
+        now = time.time()
+        helmet_boxes = self._last_helmet_boxes
+        if self.helmet_flash_until > now and helmet_boxes:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0, 0), (frame.shape[1], frame.shape[0]), (0, 165, 255), -1)
+            alpha = 0.15 * min(1.0, (self.helmet_flash_until - now) / 0.5)
+            cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+        for det in helmet_boxes:
+            x1, y1, x2, y2 = det["box"]
+            conf_pct = int(det["confidence"] * 100)
+            label = f"! NO HELMET {conf_pct}%"
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 165, 255), 3)
+            self._draw_label(frame, label, (x1, max(y1 - 12, 20)), (0, 165, 255))
+
     def _draw_scene(self, frame):
         self._draw_zone(frame)
         with self.state_lock:
@@ -2183,6 +2243,7 @@ class VideoPipeline:
                 self._draw_label(frame, label, (x1, min(y2 + 26, frame.shape[0] - 8)), color)
 
         self._draw_weapon_overlay(frame)
+        self._draw_helmet_overlay(frame)
         return frame
 
     def _run_weapon_inference(self, frame, state: Dict[str, Any]) -> None:
@@ -2270,6 +2331,63 @@ class VideoPipeline:
                     self.camera_id,
                     "weapon_detected",
                     f"Weapon detected: {best['weapon_type']} (conf={best['confidence']:.2f})",
+                )
+
+    def _run_helmet_inference(self, frame, state: Dict[str, Any]) -> None:
+        """Detect persons without helmets and persist violations."""
+        if self.helmet_detector is None or not ENABLE_HELMET_DETECT:
+            return
+        now = time.time()
+        if now - getattr(self, "_last_helmet_scan", 0.0) < WEAPON_SCAN_INTERVAL_SECONDS:
+            return
+        self._last_helmet_scan = now
+
+        try:
+            results = self.helmet_detector(frame, verbose=False, conf=HELMET_DETECT_CONFIDENCE)
+        except Exception:
+            return
+
+        detections_found: list[dict] = []
+        HELMET_LOG_COOLDOWN_SECONDS = 10.0
+        if results:
+            for r in results:
+                if r.boxes is None:
+                    continue
+                for box in r.boxes:
+                    conf = float(box.conf[0])
+                    cls_idx = int(box.cls[0])
+                    raw_label = (
+                        r.names.get(cls_idx, str(cls_idx)) if hasattr(r, "names") and r.names else str(cls_idx)
+                    )
+                    # Accept any class whose name contains "no" (case-insensitive) as a violation
+                    if "no" not in raw_label.lower() and "without" not in raw_label.lower():
+                        continue
+                    x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+                    detections_found.append({
+                        "confidence": conf,
+                        "box": (x1, y1, x2, y2),
+                    })
+
+        with self.state_lock:
+            self._last_helmet_boxes = detections_found
+
+        if detections_found:
+            self.helmet_flash_until = now + 0.5
+            if now - self._last_helmet_logged >= HELMET_LOG_COOLDOWN_SECONDS:
+                self._last_helmet_logged = now
+                best = max(detections_found, key=lambda d: d["confidence"])
+                bbox_str = ",".join(str(v) for v in best["box"])
+                self._submit_db_task(
+                    insert_helmet_event,
+                    self.camera_id,
+                    best["confidence"],
+                    bbox_str,
+                )
+                self._submit_db_task(
+                    log_event,
+                    self.camera_id,
+                    "helmet_violation",
+                    f"No-helmet violation detected (conf={best['confidence']:.2f})",
                 )
 
     def render_frame(self, frame):
@@ -2490,4 +2608,5 @@ class VideoPipeline:
                     print(f"OSINT flush failed: {exc}")
 
         self._run_weapon_inference(frame, state)
+        self._run_helmet_inference(frame, state)
         return self._draw_scene(frame)

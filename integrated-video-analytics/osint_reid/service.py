@@ -50,6 +50,7 @@ class OSINTService:
         self._buffers: dict[str, TrackletBuffer] = {}
         self._pending: dict[str, Future[Any]] = {}
         self._incidents: list[dict[str, Any]] = []
+        self._movement_events: list[dict[str, Any]] = []
 
     def queue_metrics(self) -> dict[str, int]:
         with self._lock:
@@ -73,6 +74,17 @@ class OSINTService:
             out = list(self._incidents)
             self._incidents.clear()
             return out
+
+    def push_movement_event(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            self._movement_events.insert(0, event)
+            del self._movement_events[200:]
+
+    def get_movement_events(self, since_iso: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if since_iso is None:
+                return list(self._movement_events)
+            return [e for e in self._movement_events if e.get("timestamp", "") >= since_iso]
 
     def collect_detection(
         self,
@@ -196,6 +208,18 @@ class OSINTService:
                 aggregated_reid=payload["aggregated_reid"],
                 color_hist=payload["color_histogram"],
             )
+            global_id = match_out.get("global_id")
+            if global_id and buf.class_name == "person":
+                identity = self.db.get_global_identity(global_id)
+                prev_camera = identity.get("last_seen_camera") if identity else None
+                if prev_camera and prev_camera != buf.camera_id:
+                    self.push_movement_event({
+                        "global_id": global_id,
+                        "from_camera": prev_camera,
+                        "to_camera": buf.camera_id,
+                        "timestamp": buf.end_ts,
+                        "display_name": (identity.get("display_name") or global_id) if identity else global_id,
+                    })
             logger.info(
                 "Tracklet enrichment complete",
                 extra={

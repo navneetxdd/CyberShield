@@ -24,8 +24,11 @@ from fpdf.enums import XPos, YPos
 from matplotlib import pyplot as plt
 
 from database import (
+    acknowledge_helmet_event,
     acknowledge_weapon_event,
     get_face_records,
+    get_face_snapshot,
+    get_helmet_events,
     get_metric_history,
     get_ocr_analytics,
     get_plate_reads,
@@ -34,6 +37,7 @@ from database import (
     get_vehicle_records,
     get_weapon_events,
     get_weapon_summary,
+    insert_helmet_event,
     insert_weapon_event,
 )
 from pipeline import get_system_health_snapshot, has_any_ocr_path, warm_shared_resources
@@ -917,6 +921,89 @@ def delete_watchlist_entry(identity: str):
     if not deleted:
         raise HTTPException(status_code=404, detail="Watchlist entry not found.")
     return {"status": "success", "identity": safe_identity}
+
+
+@app.post("/api/demo/sequence")
+async def start_demo_sequence(entries: list[dict]):
+    async def _delayed_mount(camera_id: str, source: str, delay: float):
+        if delay > 0:
+            await asyncio.sleep(delay)
+        mount_camera(camera_id, source)
+
+    for entry in entries:
+        cid = sanitize_camera_id(entry.get("camera_id") or next_camera_id())
+        src = str(entry.get("source", ""))
+        delay = float(entry.get("delay_seconds", 0))
+        asyncio.create_task(_delayed_mount(cid, src, delay))
+
+    return {"status": "sequence_started", "cameras": [e.get("camera_id") for e in entries]}
+
+
+@app.get("/api/persons")
+async def list_persons(watchlist_only: bool = False):
+    from osint_reid.service import get_osint_service
+    svc = get_osint_service()
+    persons = svc.db.get_all_persons(watchlist_only=watchlist_only)
+    return {"persons": persons}
+
+
+@app.get("/api/persons/movements")
+async def list_person_movements(since: str | None = None):
+    from osint_reid.service import get_osint_service
+    svc = get_osint_service()
+    return {"movements": svc.get_movement_events(since_iso=since)}
+
+
+@app.get("/api/persons/{global_id}/timeline")
+async def get_person_timeline(global_id: str):
+    from osint_reid.service import get_osint_service
+    svc = get_osint_service()
+    timeline = svc.db.get_person_timeline(global_id)
+    return {"global_id": global_id, "timeline": timeline}
+
+
+@app.get("/api/persons/{global_id}/snapshot.jpg")
+async def get_person_snapshot(global_id: str):
+    from osint_reid.service import get_osint_service
+    svc = get_osint_service()
+    latest = svc.db.get_latest_tracklet_for_global(global_id)
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No tracklet found")
+    # Extract camera_id and tracker_id from tracklet_id format "camera_id:tracker_id:class"
+    parts = latest["tracklet_id"].split(":")
+    if len(parts) >= 2:
+        cam = parts[0]
+        try:
+            tid = int(parts[1])
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Cannot parse tracker_id")
+        blob = get_face_snapshot(cam, tid)
+        if blob:
+            return Response(content=blob, media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="No snapshot available")
+
+
+@app.post("/api/persons/{global_id}/watchlist")
+async def set_person_watchlist(global_id: str, body: dict):
+    from osint_reid.service import get_osint_service
+    svc = get_osint_service()
+    flag = bool(body.get("flag", True))
+    meta = {"display_name": body.get("display_name", "")}
+    svc.db.set_watchlist_flag(global_id, flag, meta)
+    return {"status": "ok", "global_id": global_id, "watchlist_flag": flag}
+
+
+@app.get("/api/helmet/events")
+async def get_helmet_events_api(camera_id: str | None = None, limit: int = 50):
+    return {"events": get_helmet_events(camera_id=camera_id, limit=limit)}
+
+
+@app.post("/api/helmet/acknowledge/{event_id}")
+async def ack_helmet_event(event_id: int):
+    ok = acknowledge_helmet_event(event_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"status": "acknowledged", "event_id": event_id}
 
 
 @app.websocket("/ws/analytics/{camera_id}")

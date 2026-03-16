@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { Camera, BarChart2, Users, Network, Settings, ShieldAlert } from "lucide-react";
+import { Camera, BarChart2, Users, Network, Settings, ShieldAlert, UserSearch } from "lucide-react";
 
-export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "weapons" | "settings";
+export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "weapons" | "persons" | "settings";
 
 interface SidebarProps {
   activeView: ViewType;
@@ -22,6 +22,7 @@ const navItems: {
   { id: "watchlist", label: "WATCHLIST",  icon: Users },
   { id: "osint",     label: "OSINT",      icon: Network },
   { id: "weapons",   label: "WEAPONS",    icon: ShieldAlert, danger: true },
+  { id: "persons",   label: "PERSONS",    icon: UserSearch },
   { id: "settings",  label: "SETTINGS",   icon: Settings, bottom: true },
 ];
 

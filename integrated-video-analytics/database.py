@@ -172,6 +172,29 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_weapon_events_camera_timestamp ON weapon_events(camera_id, timestamp DESC)"
         )
+
+        # helmet_events table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS helmet_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                camera_id TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                confidence REAL,
+                bounding_box TEXT,
+                acknowledged INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_helmet_events_camera_timestamp ON helmet_events(camera_id, timestamp DESC)"
+        )
+
+        # face_records snapshot migration
+        face_columns = _get_columns(conn, "face_records")
+        if "snapshot_blob" not in face_columns:
+            conn.execute("ALTER TABLE face_records ADD COLUMN snapshot_blob BLOB")
+
         conn.commit()
     finally:
         conn.close()
@@ -267,23 +290,60 @@ def upsert_face_record(
     gender: Optional[str],
     age: Optional[int],
     watchlist_hit: bool,
+    snapshot_blob: Optional[bytes] = None,
 ) -> None:
     def action(conn: sqlite3.Connection) -> None:
-        conn.execute(
-            """
-            INSERT INTO face_records (camera_id, tracker_id, identity, gender, age, watchlist_hit)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(camera_id, tracker_id) DO UPDATE SET
-                identity = COALESCE(excluded.identity, face_records.identity),
-                gender = COALESCE(excluded.gender, face_records.gender),
-                age = COALESCE(excluded.age, face_records.age),
-                watchlist_hit = excluded.watchlist_hit,
-                last_seen = CURRENT_TIMESTAMP
-            """,
-            (camera_id, tracker_id, identity, gender, age, int(watchlist_hit)),
-        )
+        cols = _get_columns(conn, "face_records")
+        if "snapshot_blob" in cols and snapshot_blob is not None:
+            conn.execute(
+                """
+                INSERT INTO face_records (camera_id, tracker_id, identity, gender, age, watchlist_hit, snapshot_blob)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id, tracker_id) DO UPDATE SET
+                    identity = COALESCE(excluded.identity, face_records.identity),
+                    gender = COALESCE(excluded.gender, face_records.gender),
+                    age = COALESCE(excluded.age, face_records.age),
+                    watchlist_hit = excluded.watchlist_hit,
+                    snapshot_blob = COALESCE(face_records.snapshot_blob, excluded.snapshot_blob),
+                    last_seen = CURRENT_TIMESTAMP
+                """,
+                (camera_id, tracker_id, identity, gender, age, int(watchlist_hit), snapshot_blob),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO face_records (camera_id, tracker_id, identity, gender, age, watchlist_hit)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(camera_id, tracker_id) DO UPDATE SET
+                    identity = COALESCE(excluded.identity, face_records.identity),
+                    gender = COALESCE(excluded.gender, face_records.gender),
+                    age = COALESCE(excluded.age, face_records.age),
+                    watchlist_hit = excluded.watchlist_hit,
+                    last_seen = CURRENT_TIMESTAMP
+                """,
+                (camera_id, tracker_id, identity, gender, age, int(watchlist_hit)),
+            )
 
     _run_write(action, "upsert_face_record")
+
+
+def get_face_snapshot(camera_id: str, tracker_id: int) -> Optional[bytes]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT snapshot_blob FROM face_records WHERE camera_id=? AND tracker_id=?",
+            (camera_id, tracker_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return row["snapshot_blob"]
+    except Exception as exc:
+        print(f"DB Error (get_face_snapshot): {exc}")
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _build_filter_clause(camera_id: Optional[str], query: Optional[str]) -> tuple[str, List[Any]]:
@@ -704,6 +764,52 @@ def get_weapon_summary(camera_id: Optional[str] = None) -> Dict[str, Any]:
     finally:
         if conn is not None:
             conn.close()
+
+
+def insert_helmet_event(camera_id: str, confidence: float, bbox: str) -> None:
+    def action(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "INSERT INTO helmet_events (camera_id, confidence, bounding_box) VALUES (?, ?, ?)",
+            (camera_id, float(confidence), bbox),
+        )
+
+    _run_write(action, "insert_helmet_event")
+
+
+def get_helmet_events(
+    camera_id: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        if camera_id:
+            rows = conn.execute(
+                "SELECT * FROM helmet_events WHERE camera_id=? ORDER BY timestamp DESC LIMIT ?",
+                (camera_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM helmet_events ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+    except Exception as exc:
+        print(f"DB Error (get_helmet_events): {exc}")
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def acknowledge_helmet_event(event_id: int) -> bool:
+    def action(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            "UPDATE helmet_events SET acknowledged=1 WHERE id=?",
+            (event_id,),
+        )
+
+    return _run_write(action, "acknowledge_helmet_event")
 
 
 init_db()

@@ -348,6 +348,78 @@ class OSINTDB:
         finally:
             conn.close()
 
+    def get_person_timeline(self, global_id: str) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT tracklet_id, camera_id, start_ts, end_ts, frame_count
+                FROM tracklets
+                WHERE resolved_global_id=?
+                ORDER BY start_ts ASC
+                """,
+                (global_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            conn.close()
+
+    def get_all_persons(self, watchlist_only: bool = False) -> list[dict[str, Any]]:
+        conn = self._connect()
+        try:
+            q = """
+                SELECT g.global_id, g.display_name, g.watchlist_flag, g.watchlist_meta,
+                       g.last_seen_ts, g.last_seen_camera,
+                       COUNT(DISTINCT t.camera_id) AS cameras_visited,
+                       COUNT(t.tracklet_id) AS tracklet_count
+                FROM global_identities g
+                LEFT JOIN tracklets t ON t.resolved_global_id = g.global_id
+            """
+            if watchlist_only:
+                q += " WHERE g.watchlist_flag=1"
+            q += " GROUP BY g.global_id ORDER BY g.last_seen_ts DESC"
+            rows = conn.execute(q).fetchall()
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                item = dict(row)
+                item["watchlist_meta"] = json.loads(item.get("watchlist_meta") or "{}")
+                out.append(item)
+            return out
+        finally:
+            conn.close()
+
+    def set_watchlist_flag(self, global_id: str, flag: bool, meta: dict | None = None) -> None:
+        conn = self._connect()
+        try:
+            conn.execute(
+                """
+                UPDATE global_identities
+                SET watchlist_flag=?, watchlist_meta=?, last_updated=?
+                WHERE global_id=?
+                """,
+                (int(flag), json.dumps(meta or {}), now_utc_iso(), global_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_latest_tracklet_for_global(self, global_id: str) -> dict[str, Any] | None:
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT tracklet_id, camera_id, start_ts, end_ts
+                FROM tracklets
+                WHERE resolved_global_id=?
+                ORDER BY end_ts DESC
+                LIMIT 1
+                """,
+                (global_id,),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def upsert_vehicle(
         self,
         tracklet_id: str,
