@@ -227,7 +227,7 @@ export function IntelligenceHub({ state, onFaceClick, onPlateClick }: Intelligen
   const tabs: { key: TabKey; label: string; icon: string; count: number }[] = [
     { key: "faces", label: "FRS", icon: "◉", count: faces.length },
     { key: "plates", label: "ANPR", icon: "◻", count: plates.length },
-    { key: "vehicles", label: "VEH", icon: "▣", count: vehicles.length },
+    { key: "vehicles", label: "VEH", icon: "▣", count: state.vehicle_count ?? 0 },
     { key: "crowd", label: "CROWD", icon: "⬡", count: state.people_count },
   ];
 
