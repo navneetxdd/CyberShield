@@ -22,7 +22,7 @@ ANALYTICS_FPS = float(
     os.getenv("CYBERSHIELD_ANALYTICS_FPS", "10" if VideoPipeline.gpu_available() else "4")
 )
 TASK_REFRESH_FPS = float(
-    os.getenv("CYBERSHIELD_TASK_REFRESH_FPS", "8" if VideoPipeline.gpu_available() else "4")
+    os.getenv("CYBERSHIELD_TASK_REFRESH_FPS", "10" if VideoPipeline.gpu_available() else "5")
 )
 
 
@@ -36,7 +36,14 @@ class CameraRuntime:
         self.pipeline = VideoPipeline(camera_id)
         self.state = state
         with self.pipeline.state_lock:
-            self.state["plate_detector_ready"] = self.pipeline.plate_detector is not None
+            runtime_status = self.pipeline.get_runtime_status()
+            self.state["plate_detector_ready"] = runtime_status["plate_detector_ready"]
+            self.state["paddle_ocr_ready"] = runtime_status["paddle_ocr_ready"]
+            self.state["easyocr_ready"] = runtime_status["easyocr_ready"]
+            self.state["cloud_ocr_ready"] = runtime_status["cloud_ocr_ready"]
+            self.state["cloud_ocr_cooldown_seconds"] = runtime_status["cloud_ocr_cooldown_seconds"]
+            self.state["ocr_fallback_ready"] = runtime_status["ocr_fallback_ready"]
+            self.state["runtime_warnings"] = runtime_status["warnings"]
             self.state["detector_model"] = DETECTION_MODEL_NAME
             self.state["plate_model"] = PLATE_MODEL_NAME
             self.state["device"] = "cuda" if str(self.pipeline.device) != "cpu" else "cpu"

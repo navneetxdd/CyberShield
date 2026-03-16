@@ -1,22 +1,25 @@
 # CyberShield - Integrated Video Analytics
 
-CyberShield is a unified AI video analytics platform for vehicle counting, ANPR, facial recognition, people counting, gender analytics, searchable records, and live reporting.
+CyberShield is a unified AI video analytics platform for vehicle intelligence, ANPR, facial recognition, people counting, gender analytics, searchable records, live reporting, and watchlist-based alerting through a single FastAPI dashboard.
 
 ## Core modules
 
 - Vehicle counting and classification with `YOLOv8` object detection plus `ByteTrack` tracking
-- Automatic number plate recognition with a dedicated `YOLOv8` plate detector and `EasyOCR`
-- Facial recognition and gender analytics with `DeepFace`
+- Automatic number plate recognition with a dedicated `YOLOv8` plate detector, local `PaddleOCR` as the primary OCR engine, `EasyOCR` fallback for uncertain reads, and optional cloud fallback
+- Facial recognition, gender analytics, and age estimation with `InsightFace` (`buffalo_l`)
 - People counting and crowd density estimation
-- Searchable SQLite-backed event, plate, face, and vehicle records
-- FastAPI dashboard with live MJPEG streaming, charts, searchable records, and PDF report export
+- Searchable SQLite-backed event, plate, face, vehicle, and metrics records
+- FastAPI dashboard with live MJPEG streaming, historical trend charts, watchlist management, searchable records, and PDF report export with charts
 
 ## Runtime behavior
 
-- On CPU, the app defaults to `yolov8n.pt` for lower latency.
-- On CUDA-enabled systems, the detector defaults to `yolov8s.pt`.
-- The first run downloads detector weights, OCR assets, and DeepFace dependencies automatically.
-- Plate recognition uses `https://huggingface.co/yasirfaizahmed/license-plate-object-detection/resolve/main/best.pt` by default and can be overridden with `CYBERSHIELD_PLATE_MODEL`.
+- On CPU, the primary detector defaults to `yolov8s.pt`.
+- On CUDA-enabled systems, the detector defaults to `yolov8m.pt`.
+- The first run downloads detector weights, InsightFace assets, and OCR assets automatically.
+- Plate detection uses `https://huggingface.co/yasirfaizahmed/license-plate-object-detection/resolve/main/best.pt` by default and can be overridden with `CYBERSHIELD_PLATE_MODEL`.
+- The ANPR pipeline runs local OCR first (`PaddleOCR` primary, `EasyOCR` fallback), then uses cloud OCR only when local OCR cannot produce a valid plate.
+- If `PLATE_RECOGNIZER_API_TOKEN` is set, cloud OCR is used as a last-resort fallback and optional enrichment path, not as the primary recognition path.
+- Watchlist identities can be managed from the dashboard or by placing images inside `watchlist/`.
 
 ## Setup
 
@@ -29,9 +32,24 @@ python main.py
 
 Open `http://localhost:8080`.
 
+## Key configuration
+
+- `PLATE_RECOGNIZER_API_TOKEN`: Enables cloud ANPR enrichment; leave unset to use local OCR only
+- `CYBERSHIELD_ENABLE_PADDLE_OCR`: Enable/disable PaddleOCR primary local OCR path
+- `CYBERSHIELD_ENABLE_EASYOCR_FALLBACK`: Enable/disable EasyOCR fallback path
+- `CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE`: Confidence threshold for accepting PaddleOCR results directly
+- `CYBERSHIELD_ALLOWED_ORIGINS`: Comma-separated frontend origins allowed by CORS
+- `CYBERSHIELD_DETECT_MODEL`: Override the primary YOLO detector path or model name
+- `CYBERSHIELD_PLATE_MODEL`: Override the plate detector path or URL
+- `CYBERSHIELD_DETECT_IMGSZ`: Detector inference size
+- `CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD`: ByteTrack activation threshold
+- `CYBERSHIELD_TRACK_MATCHING_THRESHOLD`: ByteTrack matching threshold
+- `CYBERSHIELD_MAX_UPLOAD_SIZE`: Upload size limit such as `512MB`
+
 ## Notes
 
 - Uploaded videos are stored in `uploads/`.
-- Watchlist images should be placed in `watchlist/`.
+- Watchlist images are stored in `watchlist/`.
 - SQLite data is stored in `analytics.db`.
+- Metrics history is persisted and exposed to the dashboard and PDF reports.
 - The included sample videos can be used for smoke testing.

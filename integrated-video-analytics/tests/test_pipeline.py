@@ -50,3 +50,58 @@ def test_trim_timestamp_cache_expires_and_bounds_entries():
         "fresh_b": 110.0,
         "fresh_c": 120.0,
     }
+
+
+def test_plate_vote_confirmation_requires_valid_pathways(monkeypatch):
+    monkeypatch.setattr(pipeline, "PLATE_CONFIRMATION_HITS", 2)
+    monkeypatch.setattr(pipeline, "PLATE_DIRECT_ACCEPT_CONFIDENCE", 0.9)
+    monkeypatch.setattr(pipeline, "PLATE_MIN_AGGREGATE_SCORE", 1.3)
+
+    direct_vote = {"hits": 1.0, "best_confidence": 0.91, "score": 0.91}
+    aggregate_vote = {"hits": 2.0, "best_confidence": 0.74, "score": 1.35}
+    weak_vote = {"hits": 2.0, "best_confidence": 0.55, "score": 1.05}
+
+    assert pipeline.VideoPipeline._is_plate_vote_confirmed(direct_vote) is True
+    assert pipeline.VideoPipeline._is_plate_vote_confirmed(aggregate_vote) is True
+    assert pipeline.VideoPipeline._is_plate_vote_confirmed(weak_vote) is False
+
+
+def test_cloud_ocr_min_confidence_floor(monkeypatch):
+    monkeypatch.setattr(pipeline, "PLATE_RECOGNIZER_API_TOKEN", "token")
+    monkeypatch.setattr(pipeline, "CLOUD_OCR_MIN_CONFIDENCE", 0.8)
+
+    class ResponseStub:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "plate": "MH12AB1234",
+                        "score": 0.72,
+                        "vehicle": {"props": {}},
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(pipeline.requests, "post", lambda *args, **kwargs: ResponseStub())
+
+    extractor = pipeline.VideoPipeline.__new__(pipeline.VideoPipeline)
+    extractor._plate_api_disabled_until = 0.0
+
+    class EncodedStub:
+        @staticmethod
+        def tobytes():
+            return b"fake-bytes"
+
+    monkeypatch.setattr(pipeline.cv2, "imencode", lambda *_args, **_kwargs: (True, EncodedStub()))
+
+    class CropStub:
+        size = 1
+
+    result = pipeline.VideoPipeline._extract_plate_cloud(extractor, CropStub())
+
+    assert result is None

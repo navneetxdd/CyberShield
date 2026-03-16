@@ -10,8 +10,23 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import cv2
-import easyocr
+try:
+    import easyocr
+    HAS_EASYOCR = True
+except ImportError:
+    easyocr = None
+    HAS_EASYOCR = False
+try:
+    from paddleocr import PaddleOCR
+    HAS_PADDLEOCR = True
+except ImportError:
+    PaddleOCR = None
+    HAS_PADDLEOCR = False
 import numpy as np
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
 try:
     import insightface
     from insightface.app import FaceAnalysis
@@ -83,7 +98,8 @@ def read_env_float(
     try:
         value = float(raw.strip())
     except (AttributeError, ValueError):
-        raise ValueError(f"Invalid {name}={raw!r}; floating point required.")
+        print(f"Invalid {name}={raw!r}; using default {default}.")
+        return default
     if minimum is not None:
         value = max(value, minimum)
     if maximum is not None:
@@ -103,12 +119,26 @@ def read_env_int(
     try:
         value = int(raw.strip())
     except (AttributeError, ValueError):
-        raise ValueError(f"Invalid {name}={raw!r}; integer required.")
+        print(f"Invalid {name}={raw!r}; using default {default}.")
+        return default
     if minimum is not None:
         value = max(value, minimum)
     if maximum is not None:
         value = min(value, maximum)
     return value
+
+
+def read_env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    print(f"Invalid {name}={raw!r}; using default {default}.")
+    return default
 
 
 def touch_timestamp_cache(cache: Dict[Any, float], key: Any, timestamp: float) -> None:
@@ -135,7 +165,7 @@ DETECTION_CONFIDENCE = read_env_float("CYBERSHIELD_DETECT_CONFIDENCE", 0.30, min
 PLATE_CONFIDENCE = read_env_float("CYBERSHIELD_PLATE_CONFIDENCE", 0.25, minimum=0.05, maximum=0.95)
 DETECTION_IMAGE_SIZE = read_env_int(
     "CYBERSHIELD_DETECT_IMGSZ",
-    768 if torch.cuda.is_available() else 640,
+    896 if torch.cuda.is_available() else 736,
     minimum=320,
     maximum=1600,
 )
@@ -181,8 +211,20 @@ DB_QUEUE_LIMIT = read_env_int("CYBERSHIELD_DB_QUEUE_LIMIT", 256, minimum=8, maxi
 UNIQUE_CACHE_TTL_SECONDS = read_env_float("CYBERSHIELD_UNIQUE_CACHE_TTL", 3600.0, minimum=60.0)
 PLATE_CACHE_LIMIT = read_env_int("CYBERSHIELD_PLATE_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
 FACE_TRACK_CACHE_LIMIT = read_env_int("CYBERSHIELD_FACE_TRACK_CACHE_LIMIT", 4096, minimum=100, maximum=200000)
+TRACK_ACTIVATION_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_ACTIVATION_THRESHOLD", 0.18, minimum=0.05, maximum=0.9)
+TRACK_MATCHING_THRESHOLD = read_env_float("CYBERSHIELD_TRACK_MATCHING_THRESHOLD", 0.72, minimum=0.3, maximum=0.95)
+TRACK_LOST_BUFFER = read_env_int("CYBERSHIELD_TRACK_LOST_BUFFER", 45, minimum=5, maximum=180)
+TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda.is_available() else 6, minimum=1, maximum=60)
+TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 1, minimum=1, maximum=8)
+PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 300.0, minimum=10.0)
+PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.75, minimum=0.1, maximum=0.99)
+LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.5, minimum=0.05, maximum=0.95)
+CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE", 0.78, minimum=0.05, maximum=0.99)
+ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
+ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
+FACE_MATCH_THRESHOLD = read_env_float("CYBERSHIELD_FACE_MATCH_THRESHOLD", 0.95, minimum=0.5, maximum=1.3)
 
-PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "054683afe69ddd84b348aec6c88555d963301842")
+PLATE_RECOGNIZER_API_TOKEN = os.getenv("PLATE_RECOGNIZER_API_TOKEN", "").strip()
 
 DETECTION_MODEL_NAME = resolve_model_path(
     os.getenv("CYBERSHIELD_DETECT_MODEL"),
@@ -201,6 +243,9 @@ class SharedResources:
     _detector: Optional[YOLO] = None
     _plate_detector: Optional[YOLO] = None
     _face_analyzer = None
+    _ocr_reader = None
+    _paddle_ocr_reader = None
+    _initialization_errors: Dict[str, str] = {}
 
     detector_lock = threading.Lock()
     plate_lock = threading.Lock()
@@ -208,11 +253,45 @@ class SharedResources:
     init_lock = threading.Lock()
 
     @classmethod
+    def _set_initialization_error(cls, component: str, error: Exception | str) -> None:
+        cls._initialization_errors[component] = str(error)
+
+    @classmethod
+    def _clear_initialization_error(cls, component: str) -> None:
+        cls._initialization_errors.pop(component, None)
+
+    @classmethod
+    def _get_initialization_errors(cls) -> Dict[str, str]:
+        return dict(cls._initialization_errors)
+
+    @staticmethod
+    def _face_cuda_available() -> bool:
+        if ort is None:
+            return torch.cuda.is_available()
+        try:
+            providers = ort.get_available_providers()
+        except Exception:
+            return torch.cuda.is_available()
+        return torch.cuda.is_available() and "CUDAExecutionProvider" in providers
+
+    @staticmethod
+    def get_runtime_capabilities() -> Dict[str, Any]:
+        cuda_available = bool(torch.cuda.is_available())
+        face_cuda_available = bool(SharedResources._face_cuda_available())
+        return {
+            "cuda_available": cuda_available,
+            "detector_gpu_ready": cuda_available,
+            "face_gpu_ready": face_cuda_available,
+            "gpu_ready": cuda_available or face_cuda_available,
+        }
+
+    @classmethod
     def get_detector(cls) -> YOLO:
         with cls.init_lock:
             if cls._detector is None:
                 print(f"Loading primary detector: {DETECTION_MODEL_NAME}")
                 cls._detector = YOLO(DETECTION_MODEL_NAME)
+                cls._clear_initialization_error("detector")
             return cls._detector
 
     @classmethod
@@ -222,30 +301,180 @@ class SharedResources:
                 try:
                     print(f"Loading plate detector: {PLATE_MODEL_NAME}")
                     cls._plate_detector = YOLO(PLATE_MODEL_NAME)
+                    cls._clear_initialization_error("plate_detector")
                 except Exception as exc:
                     print(f"Plate detector unavailable: {exc}")
+                    cls._set_initialization_error("plate_detector", exc)
                     cls._plate_detector = None
             return cls._plate_detector
 
     @classmethod
     def get_face_analyzer(cls):
         if not HAS_INSIGHTFACE:
+            cls._set_initialization_error("face_analyzer", "InsightFace is not installed.")
+            return None
+        if FaceAnalysis is None:
+            cls._set_initialization_error("face_analyzer", "InsightFace FaceAnalysis is unavailable.")
             return None
         with cls.init_lock:
             if cls._face_analyzer is None:
                 try:
                     print("Loading ArcFace analyzer (buffalo_l)")
                     cls._face_analyzer = FaceAnalysis(name='buffalo_l')
-                    cls._face_analyzer.prepare(ctx_id=0 if torch.cuda.is_available() else -1, det_size=(640, 640))
+                    ctx_id = 0 if cls._face_cuda_available() else -1
+                    cls._face_analyzer.prepare(ctx_id=ctx_id, det_size=(640, 640))
+                    cls._clear_initialization_error("face_analyzer")
                 except Exception as exc:
                     print(f"ArcFace unavailable: {exc}")
+                    cls._set_initialization_error("face_analyzer", exc)
                     cls._face_analyzer = None
             return cls._face_analyzer
+
+    @classmethod
+    def get_ocr_reader(cls):
+        if not HAS_EASYOCR or not ENABLE_EASYOCR_FALLBACK:
+            reason = "EasyOCR fallback is disabled." if HAS_EASYOCR else "EasyOCR is not installed."
+            cls._set_initialization_error("easyocr", reason)
+            return None
+        if easyocr is None:
+            cls._set_initialization_error("easyocr", "EasyOCR module import failed.")
+            return None
+        with cls.init_lock:
+            if cls._ocr_reader is None:
+                try:
+                    print("Loading EasyOCR reader")
+                    cls._ocr_reader = easyocr.Reader(["en"], gpu=torch.cuda.is_available(), verbose=False)
+                    cls._clear_initialization_error("easyocr")
+                except Exception as exc:
+                    print(f"EasyOCR unavailable: {exc}")
+                    cls._set_initialization_error("easyocr", exc)
+                    cls._ocr_reader = None
+            return cls._ocr_reader
+
+    @classmethod
+    def get_paddle_ocr_reader(cls):
+        if not HAS_PADDLEOCR or not ENABLE_PADDLE_OCR:
+            reason = "PaddleOCR is disabled." if HAS_PADDLEOCR else "PaddleOCR is not installed."
+            cls._set_initialization_error("paddleocr", reason)
+            return None
+        if PaddleOCR is None:
+            cls._set_initialization_error("paddleocr", "PaddleOCR module import failed.")
+            return None
+        with cls.init_lock:
+            if cls._paddle_ocr_reader is None:
+                try:
+                    print("Loading PaddleOCR reader")
+                    cls._paddle_ocr_reader = PaddleOCR(
+                        lang="en",
+                    )
+                    cls._clear_initialization_error("paddleocr")
+                except Exception as exc:
+                    print(f"PaddleOCR unavailable: {exc}")
+                    cls._set_initialization_error("paddleocr", exc)
+                    cls._paddle_ocr_reader = None
+            return cls._paddle_ocr_reader
 
 def warm_shared_resources() -> None:
     SharedResources.get_detector()
     SharedResources.get_plate_detector()
     SharedResources.get_face_analyzer()
+    SharedResources.get_paddle_ocr_reader()
+    SharedResources.get_ocr_reader()
+
+
+def get_system_health_snapshot() -> Dict[str, Any]:
+    capabilities = SharedResources.get_runtime_capabilities()
+    device = "cuda:0" if capabilities["detector_gpu_ready"] else "cpu"
+    initialization_errors = SharedResources._get_initialization_errors()
+    warnings: list[Dict[str, str]] = []
+
+    if initialization_errors.get("plate_detector"):
+        warnings.append(
+            {
+                "code": "plate_detector_unavailable",
+                "severity": "warning",
+                "component": "plate_detector",
+                "message": initialization_errors["plate_detector"],
+            }
+        )
+    if capabilities["cuda_available"] and not capabilities["face_gpu_ready"] and HAS_INSIGHTFACE:
+        warnings.append(
+            {
+                "code": "face_gpu_fallback",
+                "severity": "info",
+                "component": "face_analyzer",
+                "message": "CUDA is available but InsightFace is running on CPU fallback.",
+            }
+        )
+    if initialization_errors.get("face_analyzer"):
+        warnings.append(
+            {
+                "code": "face_analyzer_unavailable",
+                "severity": "warning",
+                "component": "face_analyzer",
+                "message": initialization_errors["face_analyzer"],
+            }
+        )
+    if initialization_errors.get("paddleocr") and initialization_errors.get("easyocr") and not PLATE_RECOGNIZER_API_TOKEN:
+        warnings.append(
+            {
+                "code": "ocr_unavailable",
+                "severity": "error",
+                "component": "ocr",
+                "message": "No OCR engine is ready. Local OCR and cloud OCR fallback are unavailable.",
+            }
+        )
+    else:
+        if initialization_errors.get("paddleocr"):
+            warnings.append(
+                {
+                    "code": "paddleocr_unavailable",
+                    "severity": "info",
+                    "component": "paddleocr",
+                    "message": initialization_errors["paddleocr"],
+                }
+            )
+        if initialization_errors.get("easyocr"):
+            warnings.append(
+                {
+                    "code": "easyocr_unavailable",
+                    "severity": "info",
+                    "component": "easyocr",
+                    "message": initialization_errors["easyocr"],
+                }
+            )
+
+    return {
+        "device": device,
+        "cuda_available": capabilities["cuda_available"],
+        "gpu_ready": capabilities["gpu_ready"],
+        "detector_gpu_ready": capabilities["detector_gpu_ready"],
+        "face_gpu_ready": capabilities["face_gpu_ready"],
+        "paddle_ocr_available": bool(HAS_PADDLEOCR and ENABLE_PADDLE_OCR),
+        "easyocr_available": bool(HAS_EASYOCR and ENABLE_EASYOCR_FALLBACK),
+        "face_available": bool(HAS_INSIGHTFACE),
+        "detector_ready": SharedResources._detector is not None,
+        "plate_detector_ready": SharedResources._plate_detector is not None,
+        "face_analyzer_ready": SharedResources._face_analyzer is not None,
+        "paddle_ocr_ready": SharedResources._paddle_ocr_reader is not None,
+        "easyocr_ready": SharedResources._ocr_reader is not None,
+        "cloud_ocr_ready": bool(PLATE_RECOGNIZER_API_TOKEN),
+        "ocr_ready": bool(
+            SharedResources._paddle_ocr_reader is not None
+            or SharedResources._ocr_reader is not None
+            or PLATE_RECOGNIZER_API_TOKEN
+        ),
+        "warnings": warnings,
+        "models": {
+            "detector_model": DETECTION_MODEL_NAME,
+            "plate_model": PLATE_MODEL_NAME,
+        },
+    }
+
+
+def has_any_ocr_path() -> bool:
+    local_enabled = (HAS_PADDLEOCR and ENABLE_PADDLE_OCR) or (HAS_EASYOCR and ENABLE_EASYOCR_FALLBACK)
+    return bool(local_enabled or PLATE_RECOGNIZER_API_TOKEN)
 
 
 class VideoPipeline:
@@ -256,12 +485,20 @@ class VideoPipeline:
         self.plate_detector = SharedResources.get_plate_detector()
         self.face_analyzer = SharedResources.get_face_analyzer()
 
-        self.tracker = sv.ByteTrack()
+        self.tracker = sv.ByteTrack(
+            track_activation_threshold=TRACK_ACTIVATION_THRESHOLD,
+            lost_track_buffer=TRACK_LOST_BUFFER,
+            minimum_matching_threshold=TRACK_MATCHING_THRESHOLD,
+            frame_rate=TRACK_FRAME_RATE,
+            minimum_consecutive_frames=TRACK_MIN_CONSECUTIVE_FRAMES,
+        )
         self.state_lock = threading.RLock()
         self.plate_executor = concurrent.futures.ThreadPoolExecutor(max_workers=PLATE_EXECUTOR_WORKERS)
         self.face_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.db_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.watchlist_dir = BASE_DIR / "watchlist"
+        self.ocr_reader = SharedResources.get_ocr_reader()
+        self.paddle_ocr_reader = SharedResources.get_paddle_ocr_reader()
 
         self.track_states: Dict[int, Dict[str, Any]] = {}
         self.render_tracks: Dict[int, Dict[str, Any]] = {}
@@ -279,6 +516,10 @@ class VideoPipeline:
         self.pending_face_futures: set[concurrent.futures.Future[Any]] = set()
         self.pending_db_futures: set[concurrent.futures.Future[Any]] = set()
         self.last_metric_write = 0.0
+        self._cached_watchlist_embeddings: Dict[str, Optional[np.ndarray]] = {}
+        self._cached_watchlist_signature: tuple[tuple[str, int, int], ...] = ()
+        self._plate_api_disabled_until = 0.0
+        self.face_match_threshold = FACE_MATCH_THRESHOLD
 
     @staticmethod
     def gpu_available() -> bool:
@@ -306,6 +547,8 @@ class VideoPipeline:
 
     @staticmethod
     def _estimate_density(people_count: int, frame_width: int, frame_height: int) -> str:
+        if frame_width <= 0 or frame_height <= 0:
+            return "Low"
         area_megapixels = max((frame_width * frame_height) / 1_000_000.0, 0.5)
         density_score = people_count / area_megapixels
         if density_score < 2.5:
@@ -335,6 +578,47 @@ class VideoPipeline:
         return watchlist_dir.exists() and any(
             path.suffix.lower() in WATCHLIST_SUFFIXES for path in watchlist_dir.iterdir() if path.is_file()
         )
+
+    def _watchlist_signature(self) -> tuple[tuple[str, int, int], ...]:
+        if not self.watchlist_dir.exists():
+            return ()
+        signature: list[tuple[str, int, int]] = []
+        for path in sorted(self.watchlist_dir.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in WATCHLIST_SUFFIXES:
+                continue
+            stat = path.stat()
+            signature.append((path.name, stat.st_mtime_ns, stat.st_size))
+        return tuple(signature)
+
+    def _refresh_watchlist_cache(self) -> None:
+        signature = self._watchlist_signature()
+        if signature == self._cached_watchlist_signature:
+            return
+
+        refreshed: Dict[str, Optional[np.ndarray]] = {}
+        for filename, _, _ in signature:
+            path = self.watchlist_dir / filename
+            target_img = cv2.imread(str(path))
+            if target_img is None:
+                refreshed[path.stem] = None
+                continue
+            target_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
+            with SharedResources.face_lock:
+                if not self.face_analyzer:
+                    refreshed[path.stem] = None
+                    continue
+                faces = self.face_analyzer.get(target_rgb)
+            refreshed[path.stem] = faces[0].embedding if faces else None
+
+        self._cached_watchlist_embeddings = refreshed
+        self._cached_watchlist_signature = signature
+
+    @staticmethod
+    def _compose_vehicle_label(class_name: str, make: str, model: str, color: str) -> str:
+        if make and make != "Unknown":
+            parts = [part for part in [color, make, model] if part and part != "Unknown"]
+            return f"{' '.join(parts)} ({class_name.capitalize()})".strip()
+        return class_name.capitalize()
 
     def _drop_future(self, bucket: set[concurrent.futures.Future[Any]], future: concurrent.futures.Future[Any]) -> None:
         with self.state_lock:
@@ -468,7 +752,12 @@ class VideoPipeline:
                                 device=self.device,
                                 half=(str(self.device) != "cpu"),
                             )
-                    for box in plate_results[0].boxes:
+                    if not plate_results:
+                        continue
+                    boxes = plate_results[0].boxes
+                    if boxes is None:
+                        continue
+                    for box in boxes:
                         confidence = float(box.conf[0])
                         if confidence < PLATE_CONFIDENCE:
                             continue
@@ -506,103 +795,252 @@ class VideoPipeline:
             regions.append((heuristic_region, 0.35))
         return regions
 
-    def _extract_plate_and_mmc(self, vehicle_crop) -> Optional[Dict[str, Any]]:
-        if vehicle_crop.size == 0 or not PLATE_RECOGNIZER_API_TOKEN:
+    @staticmethod
+    def _vote_plate_candidate(
+        candidates: Dict[str, Dict[str, float]],
+        normalized_text: str,
+        confidence: float,
+        region_confidence: float,
+    ) -> None:
+        bucket = candidates.setdefault(
+            normalized_text,
+            {"hits": 0.0, "score": 0.0, "confidence": 0.0},
+        )
+        bucket["hits"] += 1.0
+        bucket["score"] += max(float(confidence), 0.0) + max(float(region_confidence), 0.0)
+        bucket["confidence"] = max(bucket["confidence"], max(float(confidence), 0.0))
+
+    @staticmethod
+    def _finalize_local_vote(
+        candidates: Dict[str, Dict[str, float]],
+        source: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not candidates:
+            return None
+        best_text, best_vote = max(
+            candidates.items(),
+            key=lambda item: (item[1]["hits"], item[1]["score"], item[1]["confidence"]),
+        )
+        derived_confidence = min(
+            0.99,
+            max(best_vote["confidence"], best_vote["score"] / max(best_vote["hits"], 1.0) / 2.0),
+        )
+        return {
+            "text": best_text,
+            "confidence": round(derived_confidence, 3),
+            "make": "Unknown",
+            "model": "",
+            "color": "",
+            "source": source,
+        }
+
+    def _extract_plate_paddle(self, vehicle_crop) -> Optional[Dict[str, Any]]:
+        if vehicle_crop.size == 0 or self.paddle_ocr_reader is None:
             return None
 
-        _, img_encoded = cv2.imencode('.jpg', vehicle_crop)
-        
+        candidates: Dict[str, Dict[str, float]] = {}
+        for region, region_confidence in self._candidate_plate_regions(vehicle_crop):
+            variants = self._prepare_plate_variants(region)
+            paddle_inputs = [region]
+            if variants:
+                paddle_inputs.append(variants[1])
+
+            for image_input in paddle_inputs:
+                try:
+                    results = self.paddle_ocr_reader.ocr(image_input, cls=True)
+                except Exception:
+                    continue
+
+                lines = []
+                if results and isinstance(results, list):
+                    first = results[0]
+                    if isinstance(first, list):
+                        lines = first
+
+                for line in lines:
+                    if not isinstance(line, (list, tuple)) or len(line) < 2:
+                        continue
+                    text_conf = line[1]
+                    if not isinstance(text_conf, (list, tuple)) or len(text_conf) < 2:
+                        continue
+                    raw_text = str(text_conf[0] or "")
+                    confidence = float(text_conf[1] or 0.0)
+                    normalized = normalize_plate_text(raw_text)
+                    if not normalized:
+                        continue
+                    if confidence < LOCAL_OCR_MIN_CONFIDENCE:
+                        continue
+                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence)
+
+        result = self._finalize_local_vote(candidates, "paddle")
+        if result and result["confidence"] >= PADDLE_PRIMARY_MIN_CONFIDENCE:
+            return result
+        return result
+
+    def _extract_plate_cloud(self, vehicle_crop) -> Optional[Dict[str, Any]]:
+        if vehicle_crop.size == 0 or not PLATE_RECOGNIZER_API_TOKEN:
+            return None
+        if time.time() < self._plate_api_disabled_until:
+            return None
+
+        ok, img_encoded = cv2.imencode('.jpg', vehicle_crop)
+        if not ok:
+            return None
+
         for attempt in range(3):
             try:
                 response = requests.post(
                     'https://api.platerecognizer.com/v1/plate-reader/',
                     headers={'Authorization': f'Token {PLATE_RECOGNIZER_API_TOKEN}'},
                     files={'upload': ('image.jpg', img_encoded.tobytes(), 'image/jpeg')},
-                    data={'features': 'mmc', 'regions': 'in'}
+                    data={'features': 'mmc', 'regions': 'in'},
+                    timeout=15,
                 )
                 if response.status_code == 429:
-                    print(f"Plate Recognizer API Error: 429 Rate Limit. Backing off for {2 ** attempt}s...")
-                    time.sleep(2 ** attempt)
-                    continue
-                response.raise_for_status()
-                break # Success
-            except requests.RequestException as e:
-                print(f"Plate Recognizer API Error: {e}")
-                if attempt == 2:
+                    self._plate_api_disabled_until = time.time() + PLATE_API_COOLDOWN_SECONDS
+                    print(
+                        "Plate Recognizer quota or rate limit reached; disabling cloud OCR "
+                        f"for {PLATE_API_COOLDOWN_SECONDS:.0f}s and falling back to local OCR."
+                    )
                     return None
+                response.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                print(f"Plate Recognizer API Error: {exc}")
+                if attempt == 2:
+                    self._plate_api_disabled_until = time.time() + min(PLATE_API_COOLDOWN_SECONDS, 60.0)
+                    return None
+                time.sleep(2 ** attempt)
         else:
             return None
-            
+
         data = response.json()
         if not data.get('results'):
             return None
-            
+
         result = data['results'][0]
+        plate_text = normalize_plate_text(result.get('plate', ''))
+        if not plate_text:
+            return None
+        cloud_confidence = float(result.get('score', 0.0) or 0.0)
+        if cloud_confidence < CLOUD_OCR_MIN_CONFIDENCE:
+            return None
+
         vehicle_props = result.get('vehicle', {}).get('props', {})
-        
+
         def pick_attribute(key, fallback_key=None):
-            # Try root level first (common in some API versions)
             val = result.get(key)
             if not val and fallback_key:
                 val = result.get(fallback_key)
-            # Try nested vehicle.props next (common in other API versions)
             if not val:
                 val = vehicle_props.get(key)
-            
             if isinstance(val, list) and len(val) > 0:
                 return val[0].get('name', 'Unknown')
+            if isinstance(val, str) and val.strip():
+                return val
             return 'Unknown'
 
         make = pick_attribute('make')
         model = pick_attribute('make_model', fallback_key='model')
         color = pick_attribute('color')
-        
-        # Clean up model if it includes the make
-        if model != 'Unknown' and make != 'Unknown' and make.lower() in model.lower():
-            model = model[len(make):].strip().capitalize()
-        
+        if model != 'Unknown' and make != 'Unknown' and model.lower().startswith(make.lower()):
+            model = model[len(make):].strip() or model
+
         return {
-            "text": result.get('plate', '').upper(),
-            "confidence": result.get('score', 0.0),
+            "text": plate_text,
+            "confidence": cloud_confidence,
             "make": make.capitalize(),
             "model": model.capitalize() if model != "Unknown" else "",
-            "color": color.capitalize()
+            "color": color.capitalize() if color != "Unknown" else "",
+            "source": "cloud",
+        }
+
+    def _extract_plate_local(self, vehicle_crop) -> Optional[Dict[str, Any]]:
+        if vehicle_crop.size == 0 or self.ocr_reader is None:
+            return None
+
+        candidates: Dict[str, Dict[str, float]] = {}
+        for region, region_confidence in self._candidate_plate_regions(vehicle_crop):
+            for variant in self._prepare_plate_variants(region):
+                try:
+                    results = self.ocr_reader.readtext(
+                        variant,
+                        detail=1,
+                        paragraph=False,
+                        allowlist=PLATE_ALLOWLIST,
+                    )
+                except Exception:
+                    continue
+
+                for result in results:
+                    if not isinstance(result, (list, tuple)) or len(result) < 3:
+                        continue
+                    raw_text = str(result[1] or "")
+                    confidence = float(result[2] or 0.0)
+                    normalized = normalize_plate_text(raw_text)
+                    if not normalized or confidence < LOCAL_OCR_MIN_CONFIDENCE:
+                        continue
+                    self._vote_plate_candidate(candidates, normalized, confidence, region_confidence)
+
+        return self._finalize_local_vote(candidates, "easyocr")
+
+    def _extract_plate_and_mmc(self, vehicle_crop) -> Optional[Dict[str, Any]]:
+        paddle_result = self._extract_plate_paddle(vehicle_crop)
+        if paddle_result and paddle_result.get("confidence", 0.0) >= PADDLE_PRIMARY_MIN_CONFIDENCE:
+            return paddle_result
+
+        easy_result = self._extract_plate_local(vehicle_crop)
+        if easy_result and (not paddle_result or easy_result.get("confidence", 0.0) > paddle_result.get("confidence", 0.0)):
+            return easy_result
+
+        if paddle_result:
+            return paddle_result
+
+        return self._extract_plate_cloud(vehicle_crop)
+
+    def get_runtime_status(self) -> Dict[str, Any]:
+        cooldown = max(self._plate_api_disabled_until - time.time(), 0.0)
+        paddle_ready = self.paddle_ocr_reader is not None
+        easy_ready = self.ocr_reader is not None
+        cloud_ready = bool(PLATE_RECOGNIZER_API_TOKEN)
+        warnings: list[Dict[str, str | float]] = []
+        if cooldown > 0.0:
+            warnings.append(
+                {
+                    "code": "cloud_ocr_cooldown",
+                    "severity": "warning",
+                    "component": "cloud_ocr",
+                    "message": "Cloud OCR fallback is temporarily cooling down after a recent failure.",
+                    "cooldown_seconds": round(cooldown, 1),
+                }
+            )
+        return {
+            "plate_detector_ready": self.plate_detector is not None,
+            "paddle_ocr_ready": paddle_ready,
+            "easyocr_ready": easy_ready,
+            "cloud_ocr_ready": cloud_ready,
+            "ocr_fallback_ready": bool(paddle_ready or easy_ready or cloud_ready),
+            "cloud_ocr_cooldown_seconds": round(cooldown, 1),
+            "warnings": warnings,
         }
 
     def _match_watchlist(self, embedding) -> Optional[str]:
         if not self._watchlist_has_images(self.watchlist_dir) or embedding is None:
             return None
 
-        if hasattr(self, '_cached_watchlist_embeddings') is False:
-            self._cached_watchlist_embeddings = {}
+        self._refresh_watchlist_cache()
 
         best_match_name = None
         best_distance = float('inf')
-        threshold = 1.05 # L2 distance threshold for ArcFace
+        threshold = self.face_match_threshold
 
-        for path in self.watchlist_dir.iterdir():
-            if path.is_file() and path.suffix.lower() in WATCHLIST_SUFFIXES:
-                match_name = path.stem
-                if match_name not in self._cached_watchlist_embeddings:
-                    target_img = cv2.imread(str(path))
-                    if target_img is not None:
-                        target_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
-                        with SharedResources.face_lock:
-                            if self.face_analyzer:
-                                faces = self.face_analyzer.get(target_rgb)
-                                if faces:
-                                    self._cached_watchlist_embeddings[match_name] = faces[0].embedding
-                                else:
-                                    self._cached_watchlist_embeddings[match_name] = None
-                    else:
-                        self._cached_watchlist_embeddings[match_name] = None
-
-                target_embedding = self._cached_watchlist_embeddings.get(match_name)
-                if target_embedding is not None:
-                    dist = float(np.linalg.norm(embedding - target_embedding))
-                    if dist < best_distance:
-                        best_distance = dist
-                        best_match_name = match_name
+        for match_name, target_embedding in self._cached_watchlist_embeddings.items():
+            if target_embedding is None:
+                continue
+            dist = float(np.linalg.norm(embedding - target_embedding))
+            if dist < best_distance:
+                best_distance = dist
+                best_match_name = match_name
 
         if best_distance < threshold:
             return best_match_name
@@ -670,7 +1108,11 @@ class VideoPipeline:
             self.last_face_attempt[tracker_id] = now
 
         x1, y1, x2, y2 = box
-        person_crop = frame[max(y1, 0):max(y2, 0), max(x1, 0):max(x2, 0)].copy()
+        clip_x1 = max(x1, 0)
+        clip_y1 = max(y1, 0)
+        clip_x2 = min(x2, frame.shape[1])
+        clip_y2 = min(y2, frame.shape[0])
+        person_crop = frame[clip_y1:clip_y2, clip_x1:clip_x2].copy()
         if person_crop.size == 0:
             with self.state_lock:
                 self.pending_tasks.discard(task_id)
@@ -681,11 +1123,21 @@ class VideoPipeline:
             FACE_QUEUE_LIMIT,
             self._process_face_async,
             person_crop,
+            (clip_x1, clip_y1),
             state,
             tracker_id,
         ):
             with self.state_lock:
                 self.pending_tasks.discard(task_id)
+
+    @staticmethod
+    def _is_plate_vote_confirmed(vote: Dict[str, float]) -> bool:
+        hits = float(vote.get("hits", 0.0) or 0.0)
+        best_confidence = float(vote.get("best_confidence", 0.0) or 0.0)
+        score = float(vote.get("score", 0.0) or 0.0)
+        direct_accept = best_confidence >= PLATE_DIRECT_ACCEPT_CONFIDENCE and hits >= 1.0
+        aggregate_accept = hits >= float(PLATE_CONFIRMATION_HITS) and score >= PLATE_MIN_AGGREGATE_SCORE
+        return direct_accept or aggregate_accept
 
     def _process_plate_async(
         self,
@@ -699,9 +1151,16 @@ class VideoPipeline:
             if not mmc_data or not mmc_data["text"]:
                 return
 
-            plate_text = mmc_data["text"]
+            plate_text = normalize_plate_text(str(mmc_data.get("text") or ""))
+            if not plate_text:
+                return
             plate_confidence = mmc_data["confidence"]
-            vehicle_type_enriched = f"{mmc_data['color']} {mmc_data['make']} {mmc_data['model']} ({class_name.capitalize()})" if mmc_data['make'] != 'Unknown' else class_name
+            vehicle_type_enriched = self._compose_vehicle_label(
+                class_name,
+                mmc_data.get("make", "Unknown"),
+                mmc_data.get("model", ""),
+                mmc_data.get("color", ""),
+            )
 
             with self.state_lock:
                 now = time.time()
@@ -734,24 +1193,36 @@ class VideoPipeline:
                 best_mmc_raw = max(mmc_bucket.values(), key=lambda v: v["hits"])
                 
                 # 3. Check Confirmations
-                plate_confirmed = (
-                    best_vote["hits"] >= PLATE_CONFIRMATION_HITS
-                    or best_vote["best_confidence"] >= PLATE_DIRECT_ACCEPT_CONFIDENCE
-                    or best_vote["score"] >= PLATE_MIN_AGGREGATE_SCORE
-                )
+                plate_confirmed = self._is_plate_vote_confirmed(best_vote)
                 
                 # MMC consensus: require at least 2 hits if we have low confidence, or just take the best after 1 if plate is confirmed.
                 # However, for stability, we'll prefer the most frequent MMC.
-                v_make, v_model, v_color = best_mmc_raw["make"], best_mmc_raw["model"], best_mmc_raw["color"]
+                v_make = str(best_mmc_raw.get("make") or "Unknown")
+                v_model = str(best_mmc_raw.get("model") or "")
+                v_color = str(best_mmc_raw.get("color") or "")
                 
                 if not plate_confirmed:
+                    self._push_recent(
+                        state,
+                        "pending_plates",
+                        {
+                            "tracker_id": tracker_id,
+                            "candidate_text": best_text,
+                            "hits": int(best_vote["hits"]),
+                            "confidence": round(best_vote["best_confidence"], 3),
+                            "source": mmc_data.get("source", "unknown"),
+                            "time": self._format_clock(),
+                        },
+                        "tracker_id",
+                    )
                     return
 
                 # Construct enriched string from VOTED MMC
-                if v_make != "Unknown":
-                    vehicle_type_enriched = f"{v_color} {v_make} {v_model} ({class_name.capitalize()})".replace("  ", " ").strip()
-                else:
-                    vehicle_type_enriched = class_name.capitalize()
+                vehicle_type_enriched = self._compose_vehicle_label(class_name, v_make, v_model, v_color)
+
+                state["pending_plates"] = [
+                    item for item in state.get("pending_plates", []) if item.get("tracker_id") != tracker_id
+                ]
 
                 existing_text = self.plate_results.get(tracker_id, {}).get("text")
                 if existing_text == best_text:
@@ -779,6 +1250,7 @@ class VideoPipeline:
                         "plate_text": best_text,
                         "vehicle_type": vehicle_type_enriched,
                         "confidence": round(best_vote["best_confidence"], 3),
+                        "ocr_source": mmc_data.get("source", "unknown"),
                         "time": self._format_clock(),
                     },
                     "plate_text",
@@ -790,11 +1262,16 @@ class VideoPipeline:
                         "tracker_id": tracker_id,
                         "vehicle_type": vehicle_type_enriched,
                         "plate_text": best_text,
+                        "confidence": round(best_vote["best_confidence"], 3),
+                        "ocr_source": mmc_data.get("source", "unknown"),
                         "time": self._format_clock(),
                     },
                     "tracker_id",
                 )
-                detail = f"Plate '{best_text}' detected on {class_name} #{tracker_id}"
+                detail = (
+                    f"Plate '{best_text}' detected on {class_name} #{tracker_id} "
+                    f"via {mmc_data.get('source', 'unknown')}"
+                )
                 self._append_event(state, "ANPR Match", detail)
 
             self._submit_db_task(
@@ -804,6 +1281,7 @@ class VideoPipeline:
                 best_text,
                 vehicle_type_enriched,
                 round(best_vote["best_confidence"], 3),
+                mmc_data.get("source", "unknown"),
             )
             self._submit_db_task(
                 upsert_vehicle_record,
@@ -816,7 +1294,7 @@ class VideoPipeline:
             with self.state_lock:
                 self.pending_tasks.discard(f"plate:{tracker_id}")
 
-    def _process_face_async(self, person_crop, state: Dict[str, Any], tracker_id: int) -> None:
+    def _process_face_async(self, person_crop, crop_origin: tuple[int, int], state: Dict[str, Any], tracker_id: int) -> None:
         try:
             if person_crop.size == 0 or not self.face_analyzer:
                 return
@@ -832,11 +1310,27 @@ class VideoPipeline:
 
             best_face = faces[0]
             bbox = best_face.bbox.astype(int)
-            fx, fy, fx2, fy2 = bbox
-            fw, fh = fx2 - fx, fy2 - fy
+            fx, fy, fx2, fy2 = bbox.tolist()
+            abs_left = max(crop_origin[0] + max(fx, 0), 0)
+            abs_top = max(crop_origin[1] + max(fy, 0), 0)
+            abs_right = max(crop_origin[0] + max(fx2, 0), abs_left)
+            abs_bottom = max(crop_origin[1] + max(fy2, 0), abs_top)
 
-            gender = "Man" if best_face.gender == 1 else "Woman"
-            match_name = self._match_watchlist(best_face.embedding)
+            gender_value = getattr(best_face, "gender", None)
+            gender_label = None
+            if gender_value == 1:
+                gender_label = "man"
+            elif gender_value == 0:
+                gender_label = "woman"
+            gender = self._normalize_gender(gender_label)
+
+            age_value = getattr(best_face, "age", None)
+            age = None
+            if isinstance(age_value, (int, float)) and 0 <= float(age_value) <= 120:
+                age = int(round(float(age_value)))
+
+            embedding = getattr(best_face, "embedding", None)
+            match_name = self._match_watchlist(embedding)
             watchlist_hit = bool(match_name)
 
             with self.state_lock:
@@ -845,9 +1339,10 @@ class VideoPipeline:
                 previous_gender = cached_face.get("gender") if cached_face else None
                 self.face_results[tracker_id] = {
                     "gender": gender,
+                    "age": age,
                     "match_name": match_name,
                     "watchlist_hit": watchlist_hit,
-                    "face_box": (fx, fy, fw, fh),
+                    "face_box": (abs_left, abs_top, abs_right, abs_bottom),
                     "expires": now + 8.0,
                 }
                 if tracker_id not in self.analyzed_face_track_ids:
@@ -862,6 +1357,7 @@ class VideoPipeline:
                     "tracker_id": tracker_id,
                     "identity": match_name or "Anonymous",
                     "gender": gender,
+                    "age": age,
                     "watchlist_hit": watchlist_hit,
                     "time": self._format_clock(),
                 }
@@ -879,7 +1375,7 @@ class VideoPipeline:
                 tracker_id,
                 match_name,
                 gender,
-                None,
+                age,
                 watchlist_hit,
             )
         finally:
@@ -932,11 +1428,7 @@ class VideoPipeline:
     def _annotate_face(self, frame, box: tuple[int, int, int, int], face_result: Optional[Dict[str, Any]]) -> None:
         x1, y1, x2, y2 = box
         if face_result and face_result.get("face_box"):
-            fx, fy, fw, fh = face_result["face_box"]
-            face_left = x1 + fx
-            face_top = y1 + fy
-            face_right = face_left + fw
-            face_bottom = face_top + fh
+            face_left, face_top, face_right, face_bottom = face_result["face_box"]
         else:
             width = x2 - x1
             height = y2 - y1
@@ -962,7 +1454,8 @@ class VideoPipeline:
             label = f"WATCHLIST: {face_result['match_name']}"
             color = (0, 0, 255)
         elif face_result and face_result.get("gender"):
-            label = face_result["gender"]
+            age = face_result.get("age")
+            label = f"{face_result['gender']}" if age is None else f"{face_result['gender']}, {age}"
             color = (255, 0, 255)
         else:
             label = "ANONYMIZED"
@@ -1089,8 +1582,6 @@ class VideoPipeline:
                 )
 
         detections = sv.Detections.from_ultralytics(results[0])
-        if len(detections) > 0:
-            detections = detections[detections.confidence >= DETECTION_CONFIDENCE]
         detections = self.tracker.update_with_detections(detections)
 
         current_vehicle_ids: set[int] = set()
@@ -1099,6 +1590,10 @@ class VideoPipeline:
         zone_count = 0
 
         with self.state_lock:
+            class_ids = detections.class_id
+            confidences = detections.confidence
+            if class_ids is None or confidences is None:
+                return self._draw_scene(frame)
             for index in range(len(detections)):
                 tracker_id = None
                 if detections.tracker_id is not None:
@@ -1107,8 +1602,8 @@ class VideoPipeline:
                     continue
 
                 x1, y1, x2, y2 = [int(value) for value in detections.xyxy[index].tolist()]
-                class_id = int(detections.class_id[index])
-                confidence = float(detections.confidence[index])
+                class_id = int(class_ids[index])
+                confidence = float(confidences[index])
                 class_name = TARGET_CLASSES.get(class_id)
                 if class_name is None:
                     continue
@@ -1163,18 +1658,12 @@ class VideoPipeline:
                                 },
                                 "tracker_id",
                             )
-
-                    if is_stable_track and (x2 - x1) >= 160 and (y2 - y1) >= 120:
-                        self._schedule_plate_task(frame, state, tracker_id, class_name, box)
                 else:
                     if is_stable_track:
                         current_people_ids.add(tracker_id)
                     if is_stable_track and not track_state["person_recorded"]:
                         track_state["person_recorded"] = True
                         state["people_total_count"] += 1
-
-                    if is_stable_track and (x2 - x1) >= 90 and (y2 - y1) >= 120:
-                        self._schedule_face_task(frame, state, tracker_id, box)
 
             state["vehicle_count"] = len(current_vehicle_ids)
             state["people_count"] = len(current_people_ids)
@@ -1186,7 +1675,13 @@ class VideoPipeline:
                 frame_height,
             )
             state["last_updated"] = self._format_clock()
-            state["plate_detector_ready"] = self.plate_detector is not None
+            status = self.get_runtime_status()
+            state["plate_detector_ready"] = status["plate_detector_ready"]
+            state["paddle_ocr_ready"] = status["paddle_ocr_ready"]
+            state["easyocr_ready"] = status["easyocr_ready"]
+            state["cloud_ocr_ready"] = status["cloud_ocr_ready"]
+            state["cloud_ocr_cooldown_seconds"] = status["cloud_ocr_cooldown_seconds"]
+            state["ocr_fallback_ready"] = status["ocr_fallback_ready"]
             state["detector_model"] = DETECTION_MODEL_NAME
             state["plate_model"] = PLATE_MODEL_NAME
             state["device"] = "cuda" if str(self.device) != "cpu" else "cpu"

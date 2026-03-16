@@ -2,11 +2,19 @@
 __pycache__/
 *.py[cod]
 *$py.class
+# Temp
+.pytest_cache/
 
 # Videos / Models / Large Files
 temp_*.mp4
 *.pt
 *.onnx
+uploads/
+watchlist/
+analytics.db
+analytics.db-*
+tools/
+runtime-config/Ultralytics/*.json
 
 # Environment
 .env

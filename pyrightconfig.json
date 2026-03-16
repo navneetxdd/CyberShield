@@ -1,0 +1,14 @@
+{
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Windows",
+  "typeCheckingMode": "basic",
+  "venvPath": "integrated-video-analytics",
+  "venv": ".venv",
+  "include": [
+    "integrated-video-analytics"
+  ],
+  "extraPaths": [
+    "integrated-video-analytics"
+  ],
+  "reportMissingTypeStubs": false
+}

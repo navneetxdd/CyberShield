@@ -14,7 +14,7 @@ def test_database_records_are_searchable(tmp_path):
         database.log_event("cam_a", "ANPR Match", "Plate ABC123 detected")
         database.log_event("cam_b", "Face Analytics", "Face analytics completed")
         database.upsert_vehicle_record("cam_a", 7, "car", "ABC123")
-        database.upsert_plate_read("cam_a", 7, "ABC123", "car", 0.91)
+        database.upsert_plate_read("cam_a", 7, "ABC123", "car", 0.91, "paddle")
         database.upsert_face_record("cam_a", 11, "alice", "Woman", None, True)
 
         events = database.get_recent_events(camera_id="cam_a")
@@ -26,6 +26,7 @@ def test_database_records_are_searchable(tmp_path):
         assert events[0]["camera_id"] == "cam_a"
         assert vehicles[0]["plate_text"] == "ABC123"
         assert plates[0]["plate_text"] == "ABC123"
+        assert plates[0]["ocr_source"] == "paddle"
         assert faces[0]["identity"] == "alice"
         assert faces[0]["watchlist_hit"] == 1
     finally:
@@ -41,12 +42,13 @@ def test_database_upserts_update_existing_records(tmp_path):
         database.init_db()
 
         database.upsert_plate_read("cam_a", 1, "XYZ999", "car", 0.55)
-        database.upsert_plate_read("cam_a", 9, "XYZ999", "truck", 0.88)
+        database.upsert_plate_read("cam_a", 9, "XYZ999", "truck", 0.88, "cloud")
 
         records = database.get_plate_reads(camera_id="cam_a")
         assert len(records) == 1
         assert records[0]["tracker_id"] == 9
         assert records[0]["vehicle_type"] == "truck"
+        assert records[0]["ocr_source"] == "cloud"
     finally:
         database.DB_PATH = original_path
 
@@ -89,5 +91,74 @@ def test_legacy_event_schema_is_still_writable(tmp_path):
         events = database.get_recent_events(camera_id="cam_legacy")
         assert len(events) == 1
         assert events[0]["detail"] == "Legacy schema write works"
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_ocr_analytics_groups_by_source(tmp_path):
+    db_path = tmp_path / "ocr_analytics.db"
+    original_path = database.DB_PATH
+
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.upsert_plate_read("cam_x", 1, "MH12AB1234", "car", 0.91, "paddle")
+        database.upsert_plate_read("cam_x", 2, "MH14XY4321", "truck", 0.71, "easyocr")
+        database.upsert_plate_read("cam_x", 3, "DL05CA7777", "car", 0.64, "cloud")
+
+        analytics = database.get_ocr_analytics(camera_id="cam_x")
+
+        assert analytics["total_reads"] == 3
+        assert len(analytics["sources"]) == 3
+        sources = {item["ocr_source"] for item in analytics["sources"]}
+        assert sources == {"paddle", "easyocr", "cloud"}
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_plate_record_filters_confidence_and_source(tmp_path):
+    db_path = tmp_path / "plate_filters.db"
+    original_path = database.DB_PATH
+
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.upsert_plate_read("cam_f", 1, "MH12AB1234", "car", 0.91, "paddle")
+        database.upsert_plate_read("cam_f", 2, "MH14XY4321", "truck", 0.62, "easyocr")
+
+        high_conf = database.get_plate_reads(camera_id="cam_f", min_confidence=0.8)
+        paddle_only = database.get_plate_reads(camera_id="cam_f", ocr_source="paddle")
+
+        assert len(high_conf) == 1
+        assert high_conf[0]["plate_text"] == "MH12AB1234"
+        assert len(paddle_only) == 1
+        assert paddle_only[0]["ocr_source"] == "paddle"
+    finally:
+        database.DB_PATH = original_path
+
+
+def test_face_and_vehicle_filters(tmp_path):
+    db_path = tmp_path / "record_filters.db"
+    original_path = database.DB_PATH
+
+    try:
+        database.DB_PATH = db_path
+        database.init_db()
+
+        database.upsert_face_record("cam_v", 11, "alice", "Woman", 28, True)
+        database.upsert_face_record("cam_v", 12, None, "Man", 32, False)
+
+        database.upsert_vehicle_record("cam_v", 21, "car", "MH12AB1234")
+        database.upsert_vehicle_record("cam_v", 22, "truck", None)
+
+        watchlist_only = database.get_face_records(camera_id="cam_v", watchlist_only=True)
+        plated_only = database.get_vehicle_records(camera_id="cam_v", require_plate=True)
+
+        assert len(watchlist_only) == 1
+        assert watchlist_only[0]["watchlist_hit"] == 1
+        assert len(plated_only) == 1
+        assert plated_only[0]["plate_text"] == "MH12AB1234"
     finally:
         database.DB_PATH = original_path

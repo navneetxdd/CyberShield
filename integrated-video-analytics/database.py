@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -102,6 +102,7 @@ def init_db() -> None:
                 plate_text TEXT NOT NULL,
                 vehicle_type TEXT NOT NULL,
                 confidence REAL,
+                ocr_source TEXT NOT NULL DEFAULT 'unknown',
                 first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
                 last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(camera_id, plate_text)
@@ -137,6 +138,10 @@ def init_db() -> None:
         if "camera_id" not in metric_columns:
             conn.execute("ALTER TABLE metrics ADD COLUMN camera_id TEXT NOT NULL DEFAULT 'camera_1'")
 
+        plate_columns = _get_columns(conn, "plate_reads")
+        if "ocr_source" not in plate_columns:
+            conn.execute("ALTER TABLE plate_reads ADD COLUMN ocr_source TEXT NOT NULL DEFAULT 'unknown'")
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_events_camera_timestamp ON events(camera_id, timestamp DESC)"
         )
@@ -155,7 +160,7 @@ def init_db() -> None:
 
 
 def log_event(camera_id: str, event_type: str, detail: str) -> None:
-    timestamp = datetime.utcnow().isoformat(timespec="seconds")
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     def action(conn: sqlite3.Connection) -> None:
         event_columns = _get_columns(conn, "events")
@@ -217,19 +222,21 @@ def upsert_plate_read(
     plate_text: str,
     vehicle_type: str,
     confidence: Optional[float],
+    ocr_source: str = "unknown",
 ) -> None:
     def action(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
-            INSERT INTO plate_reads (camera_id, tracker_id, plate_text, vehicle_type, confidence)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO plate_reads (camera_id, tracker_id, plate_text, vehicle_type, confidence, ocr_source)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(camera_id, plate_text) DO UPDATE SET
                 tracker_id = COALESCE(excluded.tracker_id, plate_reads.tracker_id),
                 vehicle_type = excluded.vehicle_type,
                 confidence = COALESCE(excluded.confidence, plate_reads.confidence),
+                ocr_source = COALESCE(excluded.ocr_source, plate_reads.ocr_source),
                 last_seen = CURRENT_TIMESTAMP
             """,
-            (camera_id, tracker_id, plate_text, vehicle_type, confidence),
+            (camera_id, tracker_id, plate_text, vehicle_type, confidence, ocr_source),
         )
 
     _run_write(action, "upsert_plate_read")
@@ -312,6 +319,8 @@ def get_plate_reads(
     limit: int = 50,
     query: Optional[str] = None,
     camera_id: Optional[str] = None,
+    min_confidence: Optional[float] = None,
+    ocr_source: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     conn: Optional[sqlite3.Connection] = None
     try:
@@ -328,11 +337,19 @@ def get_plate_reads(
             like_query = f"%{query}%"
             params.extend([like_query, like_query])
 
+        if min_confidence is not None:
+            clauses.append("confidence >= ?")
+            params.append(float(min_confidence))
+
+        if ocr_source:
+            clauses.append("LOWER(COALESCE(ocr_source, 'unknown')) = ?")
+            params.append(ocr_source.strip().lower())
+
         where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         rows = conn.execute(
             f"""
-            SELECT camera_id, tracker_id, plate_text, vehicle_type, confidence, first_seen, last_seen
+            SELECT camera_id, tracker_id, plate_text, vehicle_type, confidence, ocr_source, first_seen, last_seen
             FROM plate_reads
             {where_clause}
             ORDER BY last_seen DESC
@@ -353,6 +370,7 @@ def get_vehicle_records(
     limit: int = 50,
     query: Optional[str] = None,
     camera_id: Optional[str] = None,
+    require_plate: bool = False,
 ) -> List[Dict[str, Any]]:
     conn: Optional[sqlite3.Connection] = None
     try:
@@ -368,6 +386,9 @@ def get_vehicle_records(
             clauses.append("(vehicle_type LIKE ? OR COALESCE(plate_text, '') LIKE ? OR CAST(tracker_id AS TEXT) LIKE ?)")
             like_query = f"%{query}%"
             params.extend([like_query, like_query, like_query])
+
+        if require_plate:
+            clauses.append("COALESCE(plate_text, '') != ''")
 
         where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
@@ -394,6 +415,7 @@ def get_face_records(
     limit: int = 50,
     query: Optional[str] = None,
     camera_id: Optional[str] = None,
+    watchlist_only: bool = False,
 ) -> List[Dict[str, Any]]:
     conn: Optional[sqlite3.Connection] = None
     try:
@@ -409,6 +431,9 @@ def get_face_records(
             clauses.append("(COALESCE(identity, '') LIKE ? OR COALESCE(gender, '') LIKE ?)")
             like_query = f"%{query}%"
             params.extend([like_query, like_query])
+
+        if watchlist_only:
+            clauses.append("watchlist_hit = 1")
 
         where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
@@ -426,6 +451,135 @@ def get_face_records(
     except Exception as exc:
         print(f"DB Error: {exc}")
         return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def get_metric_history(
+    limit: int = 120,
+    camera_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        params: List[Any] = []
+        where_clause = ""
+        if camera_id:
+            where_clause = " WHERE camera_id = ?"
+            params.append(camera_id)
+        params.append(limit)
+        rows = conn.execute(
+            f"""
+            SELECT camera_id, timestamp, vehicle_count, people_count, zone_count
+            FROM metrics
+            {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        history = [dict(row) for row in rows]
+        history.reverse()
+        return history
+    except Exception as exc:
+        print(f"DB Error: {exc}")
+        return []
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def get_traffic_analytics(camera_id: Optional[str] = None) -> Dict[str, Any]:
+    history = get_metric_history(limit=720, camera_id=camera_id)
+    if not history:
+        return {
+            "peak_vehicle_count": 0,
+            "average_vehicle_count": 0.0,
+            "average_people_count": 0.0,
+            "peak_zone_count": 0,
+            "peak_timestamp": None,
+            "hourly_vehicle_flow": [],
+        }
+
+    peak_row = max(history, key=lambda row: int(row.get("vehicle_count") or 0))
+    average_vehicle = sum(int(row.get("vehicle_count") or 0) for row in history) / len(history)
+    average_people = sum(int(row.get("people_count") or 0) for row in history) / len(history)
+    peak_zone = max(int(row.get("zone_count") or 0) for row in history)
+
+    hourly_buckets: Dict[str, int] = {}
+    for row in history:
+        timestamp = str(row.get("timestamp") or "")
+        hour_key = timestamp[:13] + ":00:00" if len(timestamp) >= 13 else timestamp
+        hourly_buckets[hour_key] = max(hourly_buckets.get(hour_key, 0), int(row.get("vehicle_count") or 0))
+
+    return {
+        "peak_vehicle_count": int(peak_row.get("vehicle_count") or 0),
+        "average_vehicle_count": round(average_vehicle, 2),
+        "average_people_count": round(average_people, 2),
+        "peak_zone_count": peak_zone,
+        "peak_timestamp": peak_row.get("timestamp"),
+        "hourly_vehicle_flow": [
+            {"timestamp": timestamp, "vehicle_count": count}
+            for timestamp, count in sorted(hourly_buckets.items())
+        ],
+    }
+
+
+def get_ocr_analytics(camera_id: Optional[str] = None) -> Dict[str, Any]:
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = _connect()
+        where_clause = ""
+        params: List[Any] = []
+        if camera_id:
+            where_clause = " WHERE camera_id = ?"
+            params.append(camera_id)
+
+        totals_row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS total_reads, AVG(confidence) AS average_confidence
+            FROM plate_reads
+            {where_clause}
+            """,
+            params,
+        ).fetchone()
+
+        source_rows = conn.execute(
+            f"""
+            SELECT
+                COALESCE(ocr_source, 'unknown') AS ocr_source,
+                COUNT(*) AS reads,
+                AVG(confidence) AS average_confidence
+            FROM plate_reads
+            {where_clause}
+            GROUP BY COALESCE(ocr_source, 'unknown')
+            ORDER BY reads DESC, ocr_source ASC
+            """,
+            params,
+        ).fetchall()
+
+        total_reads = int((totals_row["total_reads"] if totals_row else 0) or 0)
+        sources: List[Dict[str, Any]] = []
+        for row in source_rows:
+            reads = int(row["reads"] or 0)
+            sources.append(
+                {
+                    "ocr_source": row["ocr_source"],
+                    "reads": reads,
+                    "share_percent": round((reads / max(total_reads, 1)) * 100.0, 2),
+                    "average_confidence": round(float(row["average_confidence"] or 0.0), 3),
+                }
+            )
+
+        return {
+            "total_reads": total_reads,
+            "average_confidence": round(float((totals_row["average_confidence"] if totals_row else 0.0) or 0.0), 3),
+            "sources": sources,
+        }
+    except Exception as exc:
+        print(f"DB Error: {exc}")
+        return {"total_reads": 0, "average_confidence": 0.0, "sources": []}
     finally:
         if conn is not None:
             conn.close()
