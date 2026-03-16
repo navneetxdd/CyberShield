@@ -80,7 +80,8 @@ TARGET_CLASSES = {
 VEHICLE_CLASSES = {"car", "motorcycle", "bus", "truck"}
 WATCHLIST_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 PLATE_ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-PLATE_TEXT_PATTERN = re.compile(r"^[A-Z0-9]{4,10}$")
+# Must be 4-10 chars AND contain at least one letter AND one digit (real plates have both)
+PLATE_TEXT_PATTERN = re.compile(r"^(?=[A-Z0-9]{4,10}$)(?=.*[A-Z])(?=.*[0-9])[A-Z0-9]+$")
 
 
 def resolve_model_path(explicit: Optional[str], *local_candidates: Path, fallback: str) -> str:
@@ -235,7 +236,7 @@ TRACK_FRAME_RATE = read_env_int("CYBERSHIELD_TRACK_FRAME_RATE", 12 if torch.cuda
 TRACK_MIN_CONSECUTIVE_FRAMES = read_env_int("CYBERSHIELD_TRACK_MIN_CONSECUTIVE", 1, minimum=1, maximum=8)
 PLATE_API_COOLDOWN_SECONDS = read_env_float("CYBERSHIELD_PLATE_API_COOLDOWN", 300.0, minimum=10.0)
 PADDLE_PRIMARY_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_PADDLE_PRIMARY_MIN_CONFIDENCE", 0.60, minimum=0.1, maximum=0.99)
-LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.20, minimum=0.05, maximum=0.95)
+LOCAL_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_LOCAL_OCR_MIN_CONFIDENCE", 0.45, minimum=0.05, maximum=0.95)
 CLOUD_OCR_MIN_CONFIDENCE = read_env_float("CYBERSHIELD_CLOUD_OCR_MIN_CONFIDENCE", 0.78, minimum=0.05, maximum=0.99)
 ENABLE_PADDLE_OCR = read_env_bool("CYBERSHIELD_ENABLE_PADDLE_OCR", True)
 ENABLE_EASYOCR_FALLBACK = read_env_bool("CYBERSHIELD_ENABLE_EASYOCR_FALLBACK", True)
