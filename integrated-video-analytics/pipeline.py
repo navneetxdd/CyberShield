@@ -636,6 +636,7 @@ class VideoPipeline:
         self.last_weapon_scan = 0.0
         self.weapon_flash_until = 0.0
         self._last_weapon_boxes: list[dict] = []
+        self._last_weapon_logged = 0.0  # timestamp of last DB insert (cooldown)
         self.last_low_confidence_log: Dict[int, float] = {}
         self.rider_proxy_track_ids: Dict[int, float] = {}
         self._cached_watchlist_embeddings: Dict[str, Optional[np.ndarray]] = {}
@@ -2230,6 +2231,7 @@ class VideoPipeline:
         with self.state_lock:
             self._last_weapon_boxes = detections_found
 
+        WEAPON_LOG_COOLDOWN_SECONDS = 10.0
         if detections_found:
             self.weapon_flash_until = now + 0.5
             state["weapon_alert_count"] = state.get("weapon_alert_count", 0) + len(detections_found)
@@ -2249,13 +2251,16 @@ class VideoPipeline:
             except Exception:
                 snapshot = None
 
-            for det in detections_found:
-                bbox_str = ",".join(str(v) for v in det["box"])
+            if now - self._last_weapon_logged >= WEAPON_LOG_COOLDOWN_SECONDS:
+                self._last_weapon_logged = now
+                # Log only the highest-confidence detection in this frame
+                best = max(detections_found, key=lambda d: d["confidence"])
+                bbox_str = ",".join(str(v) for v in best["box"])
                 self._submit_db_task(
                     insert_weapon_event,
                     self.camera_id,
-                    det["weapon_type"],
-                    det["confidence"],
+                    best["weapon_type"],
+                    best["confidence"],
                     bbox_str,
                     snapshot,
                 )
@@ -2263,7 +2268,7 @@ class VideoPipeline:
                     log_event,
                     self.camera_id,
                     "weapon_detected",
-                    f"Weapon detected: {det['weapon_type']} (conf={det['confidence']:.2f})",
+                    f"Weapon detected: {best['weapon_type']} (conf={best['confidence']:.2f})",
                 )
 
     def render_frame(self, frame):
