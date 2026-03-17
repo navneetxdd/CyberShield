@@ -36,7 +36,6 @@ from database import (
     get_vehicle_records,
 )
 from pipeline import (
-    ANPR_MODE,
     DETECTION_CONFIDENCE,
     FACE_MATCH_THRESHOLD,
     PLATE_CONFIDENCE,
@@ -449,7 +448,6 @@ def get_initial_state(camera_id: str, source: str = "") -> dict:
         "runtime_warnings": [],
         "detector_model": None,
         "plate_model": None,
-        "anpr_mode": ANPR_MODE,
         "device": "cpu",
         "stream_profile": "balanced",
         "system_health": get_ui_system_health_snapshot(),
@@ -834,11 +832,6 @@ def system_stats():
 @app.get("/api/settings/runtime")
 def get_runtime_settings():
     return dict(RUNTIME_SETTINGS)
-
-
-@app.get("/api/events")
-def get_events(limit: int = 100, event_type: str | None = None, camera_id: str | None = None):
-    return {"events": get_recent_events(limit=limit, event_type=event_type, camera_id=camera_id)}
 
 
 @app.get("/api/logs/history")

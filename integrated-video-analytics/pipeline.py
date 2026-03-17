@@ -393,22 +393,19 @@ PLATE_MODEL_NAME = resolve_model_path(
     fallback=DEFAULT_PLATE_MODEL_URL,
 )
 
-DEFAULT_WEAPON_MODEL_URL = (
-    "https://huggingface.co/keremberke/yolov8n-weapon-detection/resolve/main/best.pt"
-)
 WEAPON_MODEL_NAME = resolve_model_path(
     os.getenv("CYBERSHIELD_WEAPON_MODEL"),
     BASE_DIR / "weights" / "weapon.pt",
-    fallback=DEFAULT_WEAPON_MODEL_URL,
+    fallback="",
 )
-# High threshold to avoid false positives on non-weapon videos
-WEAPON_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_CONFIDENCE", 0.65, minimum=0.30, maximum=0.95)
+# Tuned for Roboflow-trained model (mAP50~0.53, typical scores 0.15-0.50)
+WEAPON_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_CONFIDENCE", 0.25, minimum=0.10, maximum=0.95)
 # Run weapon scan every N frames (saves compute)
-WEAPON_SCAN_INTERVAL = read_env_int("CYBERSHIELD_WEAPON_INTERVAL", 4, minimum=1, maximum=20)
+WEAPON_SCAN_INTERVAL = read_env_int("CYBERSHIELD_WEAPON_INTERVAL", 3, minimum=1, maximum=20)
 # Require weapon seen in N consecutive scan windows before logging event
-WEAPON_CONFIRM_FRAMES = read_env_int("CYBERSHIELD_WEAPON_CONFIRM_FRAMES", 4, minimum=1, maximum=30)
+WEAPON_CONFIRM_FRAMES = read_env_int("CYBERSHIELD_WEAPON_CONFIRM_FRAMES", 2, minimum=1, maximum=30)
 # Minimum seconds between weapon events per class per camera
-WEAPON_EVENT_COOLDOWN = read_env_float("CYBERSHIELD_WEAPON_COOLDOWN", 30.0, minimum=5.0)
+WEAPON_EVENT_COOLDOWN = read_env_float("CYBERSHIELD_WEAPON_COOLDOWN", 20.0, minimum=5.0)
 
 
 class SharedResources:
@@ -1011,6 +1008,8 @@ class VideoPipeline:
                     device=self.device,
                     verbose=False,
                 )
+            # Non-weapon classes the Roboflow model also outputs — ignore them
+            _IGNORE_CLASSES = {"person", "undefined", "-"}
             hits: list[tuple[str, float]] = []
             for result in results:
                 if result.boxes is None:
@@ -1019,6 +1018,8 @@ class VideoPipeline:
                     cls_id = int(box.cls[0])
                     conf = float(box.conf[0])
                     cls_name = result.names.get(cls_id, f"class_{cls_id}").lower()
+                    if cls_name in _IGNORE_CLASSES:
+                        continue
                     hits.append((cls_name, conf))
             return hits
         except Exception:
@@ -2581,11 +2582,9 @@ class VideoPipeline:
         zone_count = 0
 
         # Weapon detection: run outside the state lock (expensive inference).
-        # Gated on previous frame having people — eliminates false positives on empty scenes.
         _weapon_hits: list[tuple[str, float]] = []
         if (
             self.weapon_detector is not None
-            and self._last_frame_had_people
             and self._frame_counter % WEAPON_SCAN_INTERVAL == 0
         ):
             _weapon_hits = self._run_weapon_detection(frame)

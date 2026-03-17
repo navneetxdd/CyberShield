@@ -8,7 +8,6 @@ interface AddFeedModalProps {
   open: boolean;
   onClose: () => void;
   onCameraAdded: (cameraId: string) => void;
-  onCameraAddedSilent?: (cameraId: string) => void;
 }
 
 // ─── Single-upload tab ────────────────────────────────────────────────────────
@@ -170,12 +169,12 @@ const STATUS_COLOR: Record<RowStatus, string> = {
 };
 
 let _rowIdCounter = 1;
-function makeRow(delaySec = 0, idx = 0): SeqRow {
-  return { id: _rowIdCounter++, file: null, cameraId: `camera_${idx + 1}`, delaySec, progress: 0, status: "idle", error: "" };
+function makeRow(delaySec = 0): SeqRow {
+  return { id: _rowIdCounter++, file: null, cameraId: "", delaySec, progress: 0, status: "idle", error: "" };
 }
 
-function DemoSequenceTab({ onCameraAdded, onClose }: { onCameraAdded: (id: string) => void; onClose: () => void }) {
-  const [rows, setRows] = useState<SeqRow[]>([makeRow(0, 0), makeRow(5, 1), makeRow(10, 2)]);
+function DemoSequenceTab({ onCameraAdded }: { onCameraAdded: (id: string) => void }) {
+  const [rows, setRows] = useState<SeqRow[]>([makeRow(0), makeRow(5), makeRow(10)]);
   const [launching, setLaunching] = useState(false);
   const fileRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -220,28 +219,31 @@ function DemoSequenceTab({ onCameraAdded, onClose }: { onCameraAdded: (id: strin
 
     const results = await Promise.all(active.map(stageRow));
 
-    // Phase 2: close modal immediately and mount each feed in the background at its delay
+    // Phase 2: mount each staged feed at its configured delay (relative to now)
     const successes = results.filter(Boolean) as { row: SeqRow; stagedPath: string; resolvedCamId: string }[];
-    if (successes.length === 0) { setLaunching(false); return; }
-
-    // Close modal and go to live view now — cameras will appear as they mount
-    onClose();
-
     successes.forEach(({ row, stagedPath, resolvedCamId }) => {
+      updateRow(row.id, { status: "waiting" });
       setTimeout(async () => {
+        updateRow(row.id, { status: "mounting" });
         try {
           const data = await apiFetch(
             `/api/cameras/add?camera_id=${encodeURIComponent(resolvedCamId)}&source=${encodeURIComponent(stagedPath)}`,
             { method: "POST" }
           ) as any;
           if (data?.status === "success") {
+            updateRow(row.id, { status: "live" });
             onCameraAdded(resolvedCamId);
             window.dispatchEvent(new CustomEvent("cameras-updated"));
+          } else {
+            updateRow(row.id, { status: "error", error: data?.detail || "Mount failed" });
           }
-        } catch { /* silent — camera just won't appear */ }
+        } catch (e: any) {
+          updateRow(row.id, { status: "error", error: e?.message || "Mount error" });
+        }
       }, row.delaySec * 1000);
     });
 
+    // Don't lock the UI — user can watch progress
     setLaunching(false);
   };
 
@@ -326,7 +328,7 @@ function DemoSequenceTab({ onCameraAdded, onClose }: { onCameraAdded: (id: strin
 
       {/* Add row */}
       {!isRunning && (
-        <button onClick={() => setRows(p => [...p, makeRow(0, p.length)])}
+        <button onClick={() => setRows(p => [...p, makeRow(0)])}
           className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground hover:text-foreground transition-all">
           <Plus size={11} /> ADD FEED ROW
         </button>
@@ -344,7 +346,7 @@ function DemoSequenceTab({ onCameraAdded, onClose }: { onCameraAdded: (id: strin
 
 // ─── Modal shell ──────────────────────────────────────────────────────────────
 
-export function AddFeedModal({ open, onClose, onCameraAdded, onCameraAddedSilent }: AddFeedModalProps) {
+export function AddFeedModal({ open, onClose, onCameraAdded }: AddFeedModalProps) {
   const [tab, setTab] = useState<"upload" | "stream" | "demo">("upload");
 
   return (
@@ -374,7 +376,7 @@ export function AddFeedModal({ open, onClose, onCameraAdded, onCameraAddedSilent
         <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
           {tab === "upload" && <UploadTab onCameraAdded={onCameraAdded} onClose={onClose} />}
           {tab === "stream" && <StreamTab onCameraAdded={onCameraAdded} onClose={onClose} />}
-          {tab === "demo"   && <DemoSequenceTab onCameraAdded={onCameraAddedSilent ?? onCameraAdded} onClose={onClose} />}
+          {tab === "demo"   && <DemoSequenceTab onCameraAdded={onCameraAdded} />}
         </div>
       </DialogContent>
     </Dialog>
