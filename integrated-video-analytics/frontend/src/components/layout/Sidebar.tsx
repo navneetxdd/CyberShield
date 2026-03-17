@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { Camera, BarChart2, Users, Network, Settings } from "lucide-react";
+import { Camera, BarChart2, Users, Network, Settings, ShieldAlert, PersonStanding } from "lucide-react";
 
-export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "settings";
+export type ViewType = "live" | "analytics" | "watchlist" | "osint" | "weapons" | "persons" | "settings";
 
 interface SidebarProps {
   activeView: ViewType;
@@ -13,12 +13,15 @@ const navItems: {
   id: ViewType;
   label: string;
   icon: React.ComponentType<{ size?: string | number; className?: string }>;
+  alert?: boolean;
   bottom?: boolean;
 }[] = [
   { id: "live",      label: "LIVE VIEW",  icon: Camera },
   { id: "analytics", label: "ANALYTICS",  icon: BarChart2 },
   { id: "watchlist", label: "WATCHLIST",  icon: Users },
   { id: "osint",     label: "OSINT",      icon: Network },
+  { id: "weapons",   label: "WEAPONS",    icon: ShieldAlert, alert: true },
+  { id: "persons",   label: "PERSONS",    icon: PersonStanding },
   { id: "settings",  label: "SETTINGS",   icon: Settings, bottom: true },
 ];
 
@@ -72,8 +75,8 @@ export function Sidebar({ activeView, onNavigate, systemHealth }: SidebarProps) 
               style={{ height: 48, minHeight: 48 }}
               className={`flex items-center gap-3 px-3.5 w-full text-left transition-all ${
                 isActive
-                  ? "bg-primary/8 text-primary"
-                  : "text-muted-foreground hover:bg-border/50 hover:text-foreground"
+                  ? item.alert ? "bg-status-alert/10 text-status-alert" : "bg-primary/8 text-primary"
+                  : item.alert ? "text-status-alert/70 hover:bg-status-alert/10 hover:text-status-alert" : "text-muted-foreground hover:bg-border/50 hover:text-foreground"
               }`}
             >
               <Icon size={18} className="shrink-0" />

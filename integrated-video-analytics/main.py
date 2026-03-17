@@ -481,6 +481,11 @@ def mount_camera(camera_id: str, source: str) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Wipe all uploaded videos on every startup so no stale files carry over.
+    if UPLOAD_DIR.exists():
+        for _f in UPLOAD_DIR.iterdir():
+            if _f.is_file() and _f.suffix.lower() in VIDEO_EXTENSIONS:
+                _f.unlink(missing_ok=True)
     UPLOAD_DIR.mkdir(exist_ok=True)
     WATCHLIST_DIR.mkdir(exist_ok=True)
     SNAPSHOT_DIR.mkdir(exist_ok=True)
@@ -740,6 +745,30 @@ async def upload_video(request: Request, file: UploadFile = File(...), camera_id
         "camera_id": camera_id,
         "filename": safe_name,
         "info": f"File '{safe_name}' mounted as {camera_id}",
+    }
+
+
+@app.post("/api/video/stage")
+async def stage_video(request: Request, file: UploadFile = File(...), camera_id: str | None = None):
+    """Upload a video file to disk WITHOUT mounting it. Used by the demo sequencer so
+    all uploads can complete first; the frontend then mounts each feed at its configured delay."""
+    ensure_admin_request(request)
+    if camera_id is None:
+        form = await request.form()
+        raw_camera_id = form.get("camera_id")
+        if isinstance(raw_camera_id, str) and raw_camera_id.strip():
+            camera_id = raw_camera_id
+    camera_id = sanitize_camera_id(camera_id) if camera_id else next_camera_id()
+    safe_name = sanitize_upload_name(file.filename)
+    if Path(safe_name).suffix.lower() not in VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=415, detail="Unsupported video format.")
+    target_path = UPLOAD_DIR / f"{camera_id}_{int(time.time())}_{safe_name}"
+    await persist_upload(file, target_path)
+    return {
+        "status": "staged",
+        "camera_id": camera_id,
+        "staged_path": str(target_path),
+        "filename": safe_name,
     }
 
 

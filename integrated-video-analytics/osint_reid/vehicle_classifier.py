@@ -102,18 +102,24 @@ class VehicleClassifier:
     def _load_model(self) -> Any:
         try:
             from transformers import pipeline  # type: ignore[import-untyped]
-        except ImportError as exc:
-            raise RuntimeError(
-                "transformers is required for Stanford Cars classification. Install with: pip install transformers"
-            ) from exc
+        except ImportError:
+            logger.warning(
+                "transformers not installed — Stanford Cars classification disabled. "
+                "Install with: pip install transformers"
+            )
+            return None
 
-        model = pipeline(
-            task="image-classification",
-            model=_STANFORD_MODEL,
-            device=0 if self.device.type == "cuda" else -1,
-        )
-        logger.info("Loaded Stanford Cars ViT model", extra={"stage": "vehicle_model", "device": self.device.type})
-        return model
+        try:
+            model = pipeline(
+                task="image-classification",
+                model=_STANFORD_MODEL,
+                device=0 if self.device.type == "cuda" else -1,
+            )
+            logger.info("Loaded Stanford Cars ViT model", extra={"stage": "vehicle_model", "device": self.device.type})
+            return model
+        except Exception as exc:
+            logger.warning("Failed to load Stanford Cars model (%s) — vehicle classification disabled.", exc)
+            return None
 
     def _canonical_vehicle_label(self, raw_label: str) -> tuple[str, str]:
         normalized = " ".join(str(raw_label).replace("_", " ").split())
@@ -164,7 +170,7 @@ class VehicleClassifier:
         return (tensor - mean) / std
 
     def classify_vehicle_crops(self, crops: list[np.ndarray]) -> tuple[str, float]:
-        if not crops:
+        if not crops or self.model is None:
             return ("Unknown", 0.0)
 
         images: list[Image.Image] = []

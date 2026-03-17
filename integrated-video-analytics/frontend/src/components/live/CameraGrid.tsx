@@ -10,18 +10,22 @@ interface CameraGridProps {
   onAddFeed: () => void;
 }
 
-function getGridCols(count: number): string {
-  if (count === 1) return "grid-cols-1";
-  if (count === 2) return "grid-cols-2";
-  if (count <= 4) return "grid-cols-2";
-  if (count <= 6) return "grid-cols-3";
-  return "grid-cols-4";
+// Returns columns and rows so all cells (cameras + 1 placeholder) fit within the
+// visible area without overflowing.  Rows use 1fr so height is distributed evenly.
+function getGridLayout(cameraCount: number): { cols: number; rows: number } {
+  const total = cameraCount + 1; // +1 for the "add feed" placeholder
+  if (total <= 1) return { cols: 1, rows: 1 };
+  if (total <= 2) return { cols: 2, rows: 1 };
+  if (total <= 4) return { cols: 2, rows: 2 };
+  if (total <= 6) return { cols: 3, rows: 2 };
+  if (total <= 9) return { cols: 3, rows: 3 };
+  return { cols: 4, rows: Math.ceil(total / 4) };
 }
 
 export function CameraGrid({ cameras, activeCamera, state, onSelectCamera, onAddFeed }: CameraGridProps) {
   if (cameras.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3">
+      <div className="h-full flex flex-col items-center justify-center gap-3">
         <div className="w-16 h-16 border border-border/40 flex items-center justify-center">
           <Plus size={32} className="text-muted-foreground/40" />
         </div>
@@ -39,8 +43,21 @@ export function CameraGrid({ cameras, activeCamera, state, onSelectCamera, onAdd
     );
   }
 
+  const { cols, rows } = getGridLayout(cameras.length);
+
   return (
-    <div className={`flex-1 p-2 grid ${getGridCols(cameras.length)} gap-2 overflow-auto content-start`}>
+    <div
+      className="h-full p-2 gap-2"
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${cols}, 1fr)`,
+        gridTemplateRows: `repeat(${rows}, 1fr)`,
+        // Allow vertical scroll only when there are so many feeds that rows
+        // would be uncomfortably small (>9 cameras).
+        overflowY: cameras.length > 9 ? "auto" : "hidden",
+        overflowX: "hidden",
+      }}
+    >
       {cameras.map((id) => (
         <CameraCell
           key={id}
@@ -51,11 +68,10 @@ export function CameraGrid({ cameras, activeCamera, state, onSelectCamera, onAdd
         />
       ))}
 
-      {/* Add camera placeholder */}
+      {/* Add camera placeholder — fills its grid cell just like a CameraCell */}
       <div
         onClick={onAddFeed}
-        className="border border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center cursor-pointer transition-all"
-        style={{ aspectRatio: "16/9" }}
+        className="border border-dashed border-border hover:border-primary/50 flex flex-col items-center justify-center cursor-pointer transition-all min-h-0"
       >
         <Plus size={24} className="text-muted-foreground/40 mb-1" />
         <span className="text-[9px] font-mono text-muted-foreground uppercase">ADD FEED</span>

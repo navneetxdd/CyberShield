@@ -5,6 +5,8 @@ import { LiveView } from "@/views/LiveView";
 import { WatchlistView } from "@/views/WatchlistView";
 import { SettingsView } from "@/views/SettingsView";
 import { OSINTView } from "@/views/OSINTView";
+import { WeaponsView } from "@/views/WeaponsView";
+import { PersonsView } from "@/views/PersonsView";
 import { AlertOverlay } from "@/components/AlertOverlay";
 import { AddFeedModal } from "@/components/modals/AddFeedModal";
 import { PlateDetailModal } from "@/components/modals/PlateDetailModal";
@@ -100,6 +102,13 @@ const Index = () => {
     setActiveCamera(id);
     setActiveView("live");
     setAddFeedOpen(false);
+    window.dispatchEvent(new CustomEvent("cameras-updated"));
+  }, []);
+
+  // Used by demo sequence — adds camera without closing the modal
+  const handleCameraAddedSilent = useCallback((id: string) => {
+    setCameras(p => p.includes(id) ? p : [...p, id]);
+    setActiveView("live");
     window.dispatchEvent(new CustomEvent("cameras-updated"));
   }, []);
 
@@ -216,6 +225,8 @@ const Index = () => {
           <WatchlistView state={state} activeCamera={activeCamera} />
         )}
         {activeView === "osint" && <OSINTView />}
+        {activeView === "weapons" && <WeaponsView />}
+        {activeView === "persons" && <PersonsView />}
         {activeView === "settings" && <SettingsView />}
       </div>
 
@@ -231,6 +242,7 @@ const Index = () => {
         open={addFeedOpen}
         onClose={() => setAddFeedOpen(false)}
         onCameraAdded={handleCameraAdded}
+        onCameraAddedSilent={handleCameraAddedSilent}
       />
 
       <PlateDetailModal 

@@ -303,7 +303,7 @@ RENDER_TRACK_TTL_SECONDS = read_env_float(
 RENDER_TRACK_MAX_TTL_SECONDS = read_env_float("CYBERSHIELD_RENDER_TRACK_MAX_TTL", 4.0, minimum=1.0)
 RENDER_TRACK_LATENCY_MULTIPLIER = read_env_float(
     "CYBERSHIELD_RENDER_TRACK_LATENCY_MULTIPLIER",
-    2.5,
+    2.0,
     minimum=1.0,
     maximum=6.0,
 )
@@ -819,11 +819,15 @@ class VideoPipeline:
         latency_seconds = max(float(state.get("inference_latency_ms") or 0.0) / 1000.0, 0.0)
         analytics_fps = max(float(state.get("analytics_fps") or 0.0), 0.0)
         analytics_interval = (1.0 / analytics_fps) if analytics_fps > 0.0 else 0.0
-        ttl = max(
-            RENDER_TRACK_TTL_SECONDS,
-            latency_seconds * RENDER_TRACK_LATENCY_MULTIPLIER,
-            analytics_interval * 2.0,
-        )
+        # When analytics is running, tie TTL tightly to analysis cadence so stale
+        # box positions don't linger across many output frames (boxes "random places" bug).
+        if analytics_fps > 0.0:
+            ttl = max(
+                analytics_interval * 1.5,
+                latency_seconds * RENDER_TRACK_LATENCY_MULTIPLIER,
+            )
+        else:
+            ttl = max(RENDER_TRACK_TTL_SECONDS, latency_seconds * RENDER_TRACK_LATENCY_MULTIPLIER)
         return min(ttl, RENDER_TRACK_MAX_TTL_SECONDS)
 
     @staticmethod
@@ -2654,6 +2658,27 @@ class VideoPipeline:
             state["plate_confidence"] = status["plate_confidence"]
             state["face_match_threshold"] = status["face_match_threshold"]
 
+            self._cleanup_expired_cache()
+
+            # Recount from all currently visible non-expired stable render_tracks.
+            # This gives a persistent, accurate count that doesn't drop to 0 when the
+            # detector misses a vehicle in a single analysis frame (bogus count bug).
+            _rt_vehicle_count = 0
+            _rt_people_count = 0
+            _rt_current_types = {v: 0 for v in VEHICLE_CLASSES}
+            for _tid, _rt in self.render_tracks.items():
+                _cn = _rt["class_name"]
+                if self.track_states.get(_tid, {}).get("frames_seen", 0) < MIN_STABLE_FRAMES:
+                    continue
+                if _cn in VEHICLE_CLASSES:
+                    _rt_vehicle_count += 1
+                    _rt_current_types[_cn] += 1
+                else:
+                    _rt_people_count += 1
+            state["vehicle_count"] = _rt_vehicle_count
+            state["people_count"] = _rt_people_count + rider_proxy_count
+            state["vehicle_current_types"] = _rt_current_types
+
             if time.time() - self.last_metric_write >= METRIC_WRITE_INTERVAL_SECONDS:
                 self.last_metric_write = time.time()
                 self._submit_db_task(
@@ -2663,8 +2688,6 @@ class VideoPipeline:
                     state["people_count"],
                     state["zone_count"],
                 )
-
-            self._cleanup_expired_cache()
 
             if self.osint_service is not None:
                 try:

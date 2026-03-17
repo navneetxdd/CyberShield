@@ -22,7 +22,7 @@ export function CameraCell({ cameraId, isActive, state, onClick }: CameraCellPro
       className={`relative overflow-hidden border cursor-pointer transition-all duration-200 animate-feed-connect ${
         isActive ? "border-primary shadow-[0_0_8px_hsl(var(--primary)/0.3)]" : "border-border hover:border-primary/50 hover:shadow-[0_0_6px_hsl(var(--primary)/0.15)]"
       }`}
-      style={{ aspectRatio: "16/9" }}
+      style={{ minHeight: 0 }}
     >
       {imgError ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80">

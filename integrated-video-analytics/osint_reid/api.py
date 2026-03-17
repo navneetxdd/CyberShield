@@ -255,6 +255,49 @@ def get_tracklets(limit: int = 50):
     return {"records": service.db.list_tracklets(limit=limit)}
 
 
+@router.get("/api/osint/graph")
+def osint_graph():
+    service = _service_or_http()
+    conn = service.db._connect()
+    try:
+        identities = conn.execute(
+            "SELECT * FROM global_identities WHERE watchlist_flag=1 ORDER BY last_seen_ts DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    camera_node_ids: set[str] = set()
+    for identity in identities:
+        import json as _json
+        gid = identity["global_id"]
+        meta = _json.loads(identity["watchlist_meta"] or "{}")
+        display = meta.get("full_name") or meta.get("display_name") or gid
+        nodes.append({
+            "id": gid, "type": "person", "label": display,
+            "threat_level": meta.get("threat_level", "UNKNOWN"),
+            "snapshot_url": _watchlist_snapshot_url(gid, identity["last_seen_ts"]),
+            "meta": {k: v for k, v in meta.items() if k not in ("snapshot_path", "snapshot_filename")},
+        })
+        tracklets = service.db.get_tracklets_for_global(gid, limit=200)
+        tracklets_sorted = sorted(tracklets, key=lambda t: t.get("start_ts") or "")
+        for trk in tracklets_sorted:
+            cam_id = trk["camera_id"]
+            node_id = f"cam::{cam_id}"
+            if node_id not in camera_node_ids:
+                camera_node_ids.add(node_id)
+                nodes.append({"id": node_id, "type": "camera", "label": cam_id})
+            edges.append({
+                "id": f"{node_id}>{gid}::{trk['tracklet_id']}",
+                "from": node_id, "to": gid,
+                "tracklet_id": trk["tracklet_id"],
+                "timestamp": trk.get("start_ts"),
+                "end_ts": trk.get("end_ts"),
+                "frame_count": trk.get("frame_count"),
+            })
+    return {"nodes": nodes, "edges": edges}
+
+
 @router.post("/api/tracklet/{tracklet_id}/enrich")
 def enrich_tracklet(
     tracklet_id: str,

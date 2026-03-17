@@ -138,7 +138,7 @@ export function MetricsRow({ state }: MetricsRowProps) {
           </div>
         );
       })}
-      <VehicleClassChart types={state.vehicle_types} />
+      <VehicleClassChart types={state.vehicle_current_types ?? state.vehicle_types} />
       {/* ANPR + FRS Summary */}
       <div className="col-span-2 border border-border bg-panel p-3 relative overflow-hidden">
         <div className="text-[10px] font-mono tracking-widest uppercase text-muted-foreground mb-2 font-bold">◉ Module 2+3: ANPR / FRS</div>
