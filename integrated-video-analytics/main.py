@@ -836,6 +836,11 @@ def get_runtime_settings():
     return dict(RUNTIME_SETTINGS)
 
 
+@app.get("/api/events")
+def get_events(limit: int = 100, event_type: str | None = None, camera_id: str | None = None):
+    return {"events": get_recent_events(limit=limit, event_type=event_type, camera_id=camera_id)}
+
+
 @app.get("/api/logs/history")
 def get_logs_history(limit: int = 50, query: str | None = None, camera_id: str | None = None):
     return {"logs": get_recent_events(limit=limit, query=query, camera_id=camera_id)}

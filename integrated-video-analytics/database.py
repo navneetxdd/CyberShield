@@ -300,11 +300,16 @@ def get_recent_events(
     limit: int = 50,
     query: Optional[str] = None,
     camera_id: Optional[str] = None,
+    event_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     conn: Optional[sqlite3.Connection] = None
     try:
         conn = _connect()
         where_clause, params = _build_filter_clause(camera_id, query)
+        if event_type:
+            sep = "AND" if where_clause else "WHERE"
+            where_clause += f" {sep} event_type LIKE ?"
+            params.append(f"%{event_type}%")
         params.append(limit)
         rows = conn.execute(
             f"""

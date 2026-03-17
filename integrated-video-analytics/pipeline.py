@@ -393,6 +393,23 @@ PLATE_MODEL_NAME = resolve_model_path(
     fallback=DEFAULT_PLATE_MODEL_URL,
 )
 
+DEFAULT_WEAPON_MODEL_URL = (
+    "https://huggingface.co/keremberke/yolov8n-weapon-detection/resolve/main/best.pt"
+)
+WEAPON_MODEL_NAME = resolve_model_path(
+    os.getenv("CYBERSHIELD_WEAPON_MODEL"),
+    BASE_DIR / "weights" / "weapon.pt",
+    fallback=DEFAULT_WEAPON_MODEL_URL,
+)
+# High threshold to avoid false positives on non-weapon videos
+WEAPON_CONFIDENCE = read_env_float("CYBERSHIELD_WEAPON_CONFIDENCE", 0.65, minimum=0.30, maximum=0.95)
+# Run weapon scan every N frames (saves compute)
+WEAPON_SCAN_INTERVAL = read_env_int("CYBERSHIELD_WEAPON_INTERVAL", 4, minimum=1, maximum=20)
+# Require weapon seen in N consecutive scan windows before logging event
+WEAPON_CONFIRM_FRAMES = read_env_int("CYBERSHIELD_WEAPON_CONFIRM_FRAMES", 4, minimum=1, maximum=30)
+# Minimum seconds between weapon events per class per camera
+WEAPON_EVENT_COOLDOWN = read_env_float("CYBERSHIELD_WEAPON_COOLDOWN", 30.0, minimum=5.0)
+
 
 class SharedResources:
     _detector: Optional[YOLO] = None
@@ -402,6 +419,7 @@ class SharedResources:
     _paddle_ocr_reader = None
     _heavy_validator: Optional[YOLO] = None
     _rtdetr_validator: Optional[YOLO] = None
+    _weapon_detector: Optional[YOLO] = None
     _initialization_errors: Dict[str, str] = {}
 
     detector_lock = threading.Lock()
@@ -496,6 +514,20 @@ class SharedResources:
                     cls._set_initialization_error("rtdetr_validator", exc)
                     cls._rtdetr_validator = None
             return cls._rtdetr_validator
+
+    @classmethod
+    def get_weapon_detector(cls) -> Optional[YOLO]:
+        with cls.init_lock:
+            if cls._weapon_detector is None:
+                try:
+                    print(f"Loading weapon detector: {WEAPON_MODEL_NAME}")
+                    cls._weapon_detector = YOLO(WEAPON_MODEL_NAME)
+                    cls._clear_initialization_error("weapon_detector")
+                except Exception as exc:
+                    print(f"Weapon detector unavailable: {exc}")
+                    cls._set_initialization_error("weapon_detector", exc)
+                    cls._weapon_detector = None
+            return cls._weapon_detector
 
     @classmethod
     def get_face_analyzer(cls):
@@ -724,6 +756,10 @@ class VideoPipeline:
         self.gemini_enabled = bool(ENABLE_GEMINI_ENRICHMENT and HAS_GEMINI and GEMINI_API_KEY)
         self.heavy_validator = SharedResources.get_heavy_validator() if ENABLE_HEAVY_VALIDATOR else None
         self.rtdetr_validator = SharedResources.get_rtdetr_validator() if ENABLE_RTDETR_CONFIRMATION else None
+        self.weapon_detector = SharedResources.get_weapon_detector()
+        self._weapon_confirm_counts: Dict[str, int] = {}
+        self._weapon_event_cooldowns: Dict[str, float] = {}
+        self._last_frame_had_people = False
         self.sahi_enabled = bool(ENABLE_SAHI_INFERENCE and HAS_SAHI)
         self._base_heavy_enabled = self.heavy_validator is not None
         self._base_rtdetr_enabled = self.rtdetr_validator is not None
@@ -961,6 +997,32 @@ class VideoPipeline:
                     verbose=False,
                 )
         return sv.Detections.from_ultralytics(results[0])
+
+    def _run_weapon_detection(self, frame: np.ndarray) -> list[tuple[str, float]]:
+        """Run dedicated weapon detector on frame. Returns (class_name, confidence) pairs."""
+        if self.weapon_detector is None:
+            return []
+        try:
+            with torch.inference_mode():
+                results = self.weapon_detector.predict(
+                    source=frame,
+                    conf=WEAPON_CONFIDENCE,
+                    imgsz=640,
+                    device=self.device,
+                    verbose=False,
+                )
+            hits: list[tuple[str, float]] = []
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    conf = float(box.conf[0])
+                    cls_name = result.names.get(cls_id, f"class_{cls_id}").lower()
+                    hits.append((cls_name, conf))
+            return hits
+        except Exception:
+            return []
 
     def _should_use_sahi(self, frame: np.ndarray) -> bool:
         if not self._effective_sahi_enabled:
@@ -2518,6 +2580,16 @@ class VideoPipeline:
         stable_person_boxes: list[tuple[int, int, int, int]] = []
         zone_count = 0
 
+        # Weapon detection: run outside the state lock (expensive inference).
+        # Gated on previous frame having people — eliminates false positives on empty scenes.
+        _weapon_hits: list[tuple[str, float]] = []
+        if (
+            self.weapon_detector is not None
+            and self._last_frame_had_people
+            and self._frame_counter % WEAPON_SCAN_INTERVAL == 0
+        ):
+            _weapon_hits = self._run_weapon_detection(frame)
+
         with self.state_lock:
             class_ids = detections.class_id
             confidences = detections.confidence
@@ -2612,6 +2684,27 @@ class VideoPipeline:
                         )
                     except Exception as exc:
                         print(f"OSINT collect failed: {exc}")
+
+            # Weapon detection: process results from pre-lock inference.
+            # Debounce: require WEAPON_CONFIRM_FRAMES consecutive scan windows.
+            # Rate-limit: one event per class per WEAPON_EVENT_COOLDOWN seconds.
+            _seen_weapon_classes: set[str] = {cls for cls, _ in _weapon_hits}
+            for cls_name, conf in _weapon_hits:
+                cnt = self._weapon_confirm_counts.get(cls_name, 0) + 1
+                self._weapon_confirm_counts[cls_name] = cnt
+                last_t = self._weapon_event_cooldowns.get(cls_name, 0.0)
+                if cnt >= WEAPON_CONFIRM_FRAMES and (now - last_t) >= WEAPON_EVENT_COOLDOWN:
+                    self._weapon_event_cooldowns[cls_name] = now
+                    self._weapon_confirm_counts[cls_name] = 0
+                    self._append_event(
+                        state,
+                        "weapon_detected",
+                        f"{cls_name.title()} detected — confidence {conf:.0%}",
+                    )
+            for cls_name in list(self._weapon_confirm_counts.keys()):
+                if cls_name not in _seen_weapon_classes:
+                    self._weapon_confirm_counts[cls_name] = 0
+            self._last_frame_had_people = bool(current_people_ids)
 
             # Rider proxy: treat unmatched motorcycle tracks as one visible person.
             rider_proxy_count = 0
