@@ -257,9 +257,6 @@ def get_tracklets(limit: int = 50):
 
 @router.get("/api/osint/graph")
 def osint_graph():
-    """Return a graph of all watchlisted identities and their camera movements.
-    Each person is a node; cameras they were seen in are nodes connected by edges
-    ordered chronologically. Also includes OSINT profile data from watchlist_meta."""
     service = _service_or_http()
     conn = service.db._connect()
     try:
@@ -268,51 +265,36 @@ def osint_graph():
         ).fetchall()
     finally:
         conn.close()
-
     nodes: list[dict] = []
     edges: list[dict] = []
     camera_node_ids: set[str] = set()
-
     for identity in identities:
         import json as _json
         gid = identity["global_id"]
         meta = _json.loads(identity["watchlist_meta"] or "{}")
         display = meta.get("full_name") or meta.get("display_name") or gid
-
-        # Person node
         nodes.append({
-            "id": gid,
-            "type": "person",
-            "label": display,
+            "id": gid, "type": "person", "label": display,
             "threat_level": meta.get("threat_level", "UNKNOWN"),
             "snapshot_url": _watchlist_snapshot_url(gid, identity["last_seen_ts"]),
             "meta": {k: v for k, v in meta.items() if k not in ("snapshot_path", "snapshot_filename")},
         })
-
-        # Tracklets for this identity (ordered by start_ts)
         tracklets = service.db.get_tracklets_for_global(gid, limit=200)
         tracklets_sorted = sorted(tracklets, key=lambda t: t.get("start_ts") or "")
-
         for trk in tracklets_sorted:
             cam_id = trk["camera_id"]
             node_id = f"cam::{cam_id}"
-
-            # Camera node (deduplicated)
             if node_id not in camera_node_ids:
                 camera_node_ids.add(node_id)
                 nodes.append({"id": node_id, "type": "camera", "label": cam_id})
-
-            # Edge: camera → person (first sighting in this camera)
             edges.append({
                 "id": f"{node_id}>{gid}::{trk['tracklet_id']}",
-                "from": node_id,
-                "to": gid,
+                "from": node_id, "to": gid,
                 "tracklet_id": trk["tracklet_id"],
                 "timestamp": trk.get("start_ts"),
                 "end_ts": trk.get("end_ts"),
                 "frame_count": trk.get("frame_count"),
             })
-
     return {"nodes": nodes, "edges": edges}
 
 
