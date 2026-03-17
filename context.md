@@ -1,320 +1,633 @@
-# CyberShield Session Context (Detailed)
+# CyberShield — System Architecture & Implementation Reference
 
-## 1) Purpose of this file
-This document is a full session-level implementation log for the work completed in this chat history.
-It is intentionally detailed and includes:
-- What was requested
-- What was implemented
-- What was changed in code and configuration
-- What was validated
-- What was fixed that was not originally called out by the user
-- What environmental issues affected execution and how they were handled
+**Last updated:** 2026-03-17
+**Repo:** https://github.com/navneetxdd/CyberShield
+**Latest commit:** `af84bbd4` — feat: OSINT graph, Weapons/Persons views, camera grid fix, demo sequence
 
-This file was prepared by verifying repository state, tracked diffs, untracked/new artifacts, and command outcomes.
+---
 
-## 2) Workspace and repo scope
-- Workspace root: c:/Users/navne/Desktop/cshield
-- Primary backend app: c:/Users/navne/Desktop/cshield/integrated-video-analytics
-- Integrated frontend now used by backend: c:/Users/navne/Desktop/cshield/integrated-video-analytics/frontend
-- React production output served by backend: c:/Users/navne/Desktop/cshield/integrated-video-analytics/static_ui
-- Reference UI source copy (kept as imported source): c:/Users/navne/Desktop/cshield/C-Shield-ref/LovableUI/sentinel-command-main
+## 1. Project Overview
 
-## 3) User objectives captured in this chat
-- Replace the old FastAPI template-first UI flow with the provided React/Tailwind UI.
-- Merge both projects cleanly, wiring real backend data (no mock/demo data behavior).
-- Ensure backend + frontend integration works with production serving.
-- Resolve TypeScript/build errors.
-- Resolve missing dependency/runtime issues discovered during implementation.
-- Update documentation to reflect all completed work.
+CyberShield is a real-time AI-powered video surveillance platform. It processes live or recorded camera feeds through a multi-stage ML pipeline (detection → tracking → ANPR → face recognition → ReID → cross-camera identity linkage) and presents results through a React dashboard served directly by the FastAPI backend.
 
-## 4) High-level outcomes
-- React UI integration into integrated-video-analytics completed.
-- Backend static serving and SPA fallback implemented.
-- Frontend real API wiring completed for major views/components.
-- Frontend build now succeeds and outputs to static_ui.
-- The specific tsconfig/vitest type-definition issue in the reference UI copy was resolved by dependency installation and follow-up fixes.
-- Additional compatibility fixes were applied to satisfy modern package APIs (react-day-picker and react-resizable-panels).
-- Backend tests were run multiple times during session history; in configured venv runs, tests passed.
+**Key capabilities:**
+- Multi-camera live feed processing with GPU/CPU adaptive scheduling
+- Automatic Number Plate Recognition (ANPR) with dual OCR (PaddleOCR + EasyOCR)
+- Face detection, matching, and watchlist alerting (InsightFace)
+- Person re-identification across cameras (OSNet ReID)
+- Cross-camera identity continuity (tracklet aggregation + cosine similarity matching)
+- OSINT entity graph: visualises watchlisted persons and their camera sightings
+- Weapons detection event logging
+- Vehicle classification (make/model/color)
+- PDF report generation, Maltego export, CSV export
+- Real-time WebSocket analytics stream per camera
 
-## 5) Tracked backend changes (verified from git diff)
+---
 
-### 5.1 integrated-video-analytics/main.py
-Implemented changes:
-- Added local .env file loading helper:
-  - load_local_env(BASE_DIR / ".env")
-  - Parses KEY=VALUE pairs and sets process env defaults.
-- Added system metrics support:
-  - psutil imported and used.
-  - Optional NVML integration via pynvml with guarded availability handling.
-  - New function get_system_stats_snapshot() returns CPU/RAM and GPU metrics.
-- Added frontend serving paths/constants:
-  - FRONTEND_DIST_DIR = BASE_DIR / "static_ui"
-  - FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
-  - LEGACY_INDEX_PATH = BASE_DIR / "templates" / "index.html"
-- Added static mount:
-  - app.mount("/assets", StaticFiles(...), name="frontend-assets")
-- Updated root route behavior:
-  - Returns static_ui/index.html when built frontend exists.
-  - Falls back to templates/index.html if static bundle absent.
-  - Returns 503 HTML response if neither exists.
-- Added CORS defaults for Vite dev:
-  - http://127.0.0.1:5173
-  - http://localhost:5173
-- Added endpoint:
-  - GET /api/system/stats
-- Added endpoint:
-  - GET /api/analytics/summary
-  - Computes summary from stored vehicles/faces/plates/events.
-  - Returns counts, watchlist_hits, gender breakdown, vehicle type breakdown, top plates, event type counts.
-- Added endpoints:
-  - GET /api/settings/face-threshold
-  - POST /api/settings/face-threshold
-  - Uses in-memory runtime setting map RUNTIME_SETTINGS with validation.
-- Added SPA catch-all route:
-  - GET /{full_path:path} include_in_schema=False
-  - Blocks API/docs/openapi prefixes, serves file if present, else serves SPA index fallback, else legacy index fallback.
+## 2. Repository Structure
 
-### 5.2 integrated-video-analytics/pipeline.py
-Implemented changes:
-- Plate normalization regex changed:
-  - From strict Indian-style format to broader alphanumeric length gate: ^[A-Z0-9]{4,10}$
-- Runtime thresholds/intervals tuned:
-  - DETECTION_CONFIDENCE default raised to 0.20
-  - DETECTION_IMAGE_SIZE default raised to 1024
-  - PLATE_SCAN_INTERVAL_SECONDS default lowered to 2.0
-  - PLATE_REFRESH_INTERVAL_SECONDS default lowered to 8.0
-  - PLATE_HEURISTIC_MIN_VEHICLE_WIDTH default lowered to 100
-  - PLATE_CONFIRMATION_HITS default lowered to 1
-  - PLATE_DIRECT_ACCEPT_CONFIDENCE lowered to 0.50
-  - PLATE_MIN_AGGREGATE_SCORE lowered to 0.28
-  - PADDLE_PRIMARY_MIN_CONFIDENCE lowered to 0.60
-  - LOCAL_OCR_MIN_CONFIDENCE lowered to 0.20
-- PaddleOCR construction updated:
-  - use_textline_orientation=True
-- Adaptive governor expanded:
-  - Added effective runtime values for plate scan interval, plate refresh interval, face scan interval, and Gemini enablement.
-  - Pressure/caution/normal modes now adjust these values.
-- OCR preprocessing expanded:
-  - Added contrast and sharpened-contrast variants to plate preprocessing set.
-- Plate search window broadened:
-  - top adjusted from 30% to 10%
-  - bottom adjusted from 92% to 95%
-- Added robust Paddle output parser helper:
-  - _iter_paddle_text_candidates() handles list/dict output forms.
-- Paddle OCR execution hardened:
-  - Adds cls=True then cls=False retry strategy.
-  - Expands tested image variants.
-- EasyOCR calls adjusted:
-  - Explicitly includes raw grayscale first before transformed variants.
-  - Removed allowlist argument in shown diff path.
-- Gemini enrichment runtime gating changed:
-  - uses _effective_gemini_enabled rather than base gemini_enabled directly.
-- Scan timing now uses adaptive effective intervals:
-  - plate scan/refresh and face scan checks updated to effective values.
-- Low-confidence ANPR observability added:
-  - logs "ANPR Low Confidence" events at controlled cadence.
-- Rider proxy counting added:
-  - stores motorcycle tracks and stable person boxes.
-  - overlap function _box_overlaps() introduced.
-  - unmatched motorcycles contribute proxy people count.
-  - cache trim/touch for rider proxy IDs added.
-- Additional state/cache members added:
-  - last_low_confidence_log
-  - rider_proxy_track_ids
+```
+CyberShield/
+├── integrated-video-analytics/       ← Main application root
+│   ├── main.py                       ← FastAPI app, all HTTP/WS endpoints
+│   ├── pipeline.py                   ← Per-camera ML processing pipeline
+│   ├── runtime.py                    ← CameraRuntime: manages pipeline threads
+│   ├── database.py                   ← SQLite analytics DB (events, metrics, faces, plates, vehicles)
+│   ├── auth.py                       ← Admin token auth helpers
+│   ├── analytics.db                  ← SQLite DB (gitignored)
+│   ├── weights/best.pt               ← Local plate detector weights (gitignored)
+│   ├── yolo11s.pt                    ← Primary detector (gitignored)
+│   ├── uploads/                      ← Staged video files + snapshots
+│   ├── watchlist/                    ← Enrolled face images (.jpg/.png)
+│   ├── snapshots/                    ← Auto-captured face/plate/vehicle crops
+│   │   ├── faces/
+│   │   ├── plates/
+│   │   └── vehicles/
+│   ├── static_ui/                    ← Compiled React frontend (served by FastAPI)
+│   │   ├── index.html
+│   │   └── assets/
+│   │       ├── index-GIURsKmK.js    ← Current production bundle
+│   │       └── index-DegkAA9L.css
+│   ├── frontend/                     ← React/TypeScript source
+│   │   ├── vite.config.ts
+│   │   ├── src/
+│   │   │   ├── pages/
+│   │   │   │   ├── Index.tsx         ← Root dashboard, state orchestration
+│   │   │   │   ├── Analytics.tsx     ← Analytics dashboard page
+│   │   │   │   └── NotFound.tsx
+│   │   │   ├── views/
+│   │   │   │   ├── LiveView.tsx      ← Multi-camera live feed
+│   │   │   │   ├── WatchlistView.tsx ← Watchlist enrolment & management
+│   │   │   │   ├── OSINTView.tsx     ← Entity graph, profile panel, tracklets
+│   │   │   │   ├── WeaponsView.tsx   ← Weapon event log, threat level KPIs
+│   │   │   │   ├── PersonsView.tsx   ← Person registry table
+│   │   │   │   └── SettingsView.tsx  ← Runtime configuration
+│   │   │   ├── components/
+│   │   │   │   ├── layout/
+│   │   │   │   │   ├── Sidebar.tsx   ← Nav: LIVE/ANALYTICS/WATCHLIST/OSINT/WEAPONS/PERSONS/SETTINGS
+│   │   │   │   │   └── TopBar.tsx
+│   │   │   │   ├── live/
+│   │   │   │   │   ├── CameraGrid.tsx  ← Responsive 1/2/2×2/3×2/3×3 grid
+│   │   │   │   │   └── CameraCell.tsx  ← Single feed cell (MJPEG img stream)
+│   │   │   │   ├── modals/
+│   │   │   │   │   ├── AddFeedModal.tsx      ← Upload/stage/mount cameras + demo sequence
+│   │   │   │   │   ├── PlateDetailModal.tsx  ← Plate detail drill-down
+│   │   │   │   │   ├── QuickEnrollModal.tsx  ← Face enrolment from detection
+│   │   │   │   │   └── AlertHistoryPopover.tsx
+│   │   │   │   ├── AlertOverlay.tsx
+│   │   │   │   ├── MetricsRow.tsx
+│   │   │   │   ├── VideoPlayer.tsx
+│   │   │   │   ├── ThreatMap.tsx
+│   │   │   │   ├── CrowdDensityGauge.tsx
+│   │   │   │   ├── IntelligenceHub.tsx
+│   │   │   │   ├── SessionSummaryDrawer.tsx
+│   │   │   │   └── WatchlistPanel.tsx
+│   │   │   ├── hooks/
+│   │   │   │   └── useBackendStream.ts  ← WebSocket → CyberShieldState
+│   │   │   ├── lib/
+│   │   │   │   ├── api.ts             ← apiFetch(), apiUpload()
+│   │   │   │   ├── config.ts          ← API_URL, WS_URL, API_KEY from env/origin
+│   │   │   │   └── utils.ts           ← cn() tailwind helper
+│   ├── osint_reid/                   ← OSINT & ReID subsystem
+│   │   ├── api.py                    ← FastAPI router, all /api/osint/* and /ws/state
+│   │   ├── service.py                ← OSINTService: orchestrates pipeline → DB → matcher
+│   │   ├── db.py                     ← OSINTDB: SQLite WAL, tracklets/global_identities/incidents
+│   │   ├── reid_worker.py            ← OSNet ReID + InsightFace embeddings (graceful degradation)
+│   │   ├── cross_camera_matcher.py   ← CrossCameraMatcher: cosine similarity, fused scoring
+│   │   ├── aggregation.py            ← Tracklet payload aggregation
+│   │   ├── vehicle_classifier.py     ← ViT Stanford Cars classifier + HSV color voting
+│   │   ├── camera_graph.py           ← Camera adjacency/topology graph
+│   │   ├── config.py                 ← Env-driven configuration constants
+│   │   └── migrations/
+│   │       └── 0001_add_tracklets_global_sql.sql
+│   ├── migrations/
+│   │   └── run.py                    ← Migration runner
+│   ├── seed_osint.py                 ← Seeds Marcus J. Webb demo watchlist entry
+│   ├── config/
+│   │   └── camera_graph.json         ← Camera adjacency topology
+│   ├── tests/
+│   └── requirements.txt
+├── context.md                        ← This file
+├── README.md
+└── C-Shield-ref/                     ← Reference UI source (LovableUI origin)
+```
 
-### 5.3 integrated-video-analytics/osint_reid/reid_worker.py
-Implemented changes:
-- ReID model loading changed from hard failure to graceful degradation:
-  - Missing torchreid now logs warning and disables ReID embeddings instead of raising RuntimeError.
-  - Model load exceptions now warn and return None.
-- compute_reid_embeddings now short-circuits when model unavailable.
+---
 
-### 5.4 integrated-video-analytics/osint_reid/vehicle_classifier.py
-Implemented changes:
-- Model strategy switched to Stanford Cars classifier pipeline:
-  - Uses transformers image-classification pipeline
-  - Model id: nateraw/vit-base-patch16-224-in21k-ft-scar
-- Added canonical brand/model mapping and body-style heuristic extraction:
-  - _STANFORD_BRAND_MAP
-  - _BODY_KEYWORDS
-  - _canonical_vehicle_label()
-- classify_vehicle_crops rewritten:
-  - PIL conversion and top-k aggregation strategy
-  - confidence aggregation per canonical label
-- classify_color rewritten:
-  - vote-based HSV color determination
-  - better handling for white/black/silver/gray plus hue-based colors
+## 3. Backend Architecture
 
-### 5.5 integrated-video-analytics/requirements.txt
-Added dependencies:
-- pynvml>=11.0.0
-- transformers>=4.40.0
+### 3.1 FastAPI Application (`main.py`)
 
-### 5.6 integrated-video-analytics/.env.example
-Added sample variables:
-- ADMIN_API_TOKEN=
-- CYBERSHIELD_WS_INTERVAL=1.0
+**App startup (lifespan):**
+1. Loads `.env` file (KEY=VALUE parser)
+2. Creates `UPLOAD_DIR`, `WATCHLIST_DIR`, `SNAPSHOT_DIR`
+3. Calls `warm_shared_resources()` to pre-load ML models into shared pool
+4. Mounts OSINT router: `app.include_router(osint_router)`
+5. Mounts `/assets` static files from `static_ui/assets/`
 
-### 5.7 Tests updated
-- integrated-video-analytics/tests/test_pipeline.py
-  - Updated invalid plate normalization expectations for new regex behavior.
-- integrated-video-analytics/osint_reid/tests/test_end_to_end.py
-  - Converted slow marker usage to decorator form for SAHI/RT-DETR behavior test.
+**Static serving / SPA:**
+- `GET /` — serves `static_ui/index.html` if present, else `templates/index.html`, else 503
+- `GET /{full_path}` (catch-all) — blocks `/api`, `/docs`, `/openapi.json`; serves file if found; else serves SPA index fallback
 
-### 5.8 Template/snippet changes
-- Deleted:
-  - integrated-video-analytics/osint_reid/ui_snippets/incident_rail.html
-  - integrated-video-analytics/osint_reid/ui_snippets/watchlist_editor.html
-- Modified:
-  - integrated-video-analytics/templates/index.html
-  - This file was heavily changed; session behavior indicates incident rail/watchlist editor were consolidated directly in template flow while React migration path was introduced in parallel.
+**CORS origins allowed:** `http://127.0.0.1:5173`, `http://localhost:5173` (Vite dev), plus production origin
 
-## 6) Integrated frontend implementation (new directory)
-Directory added:
-- integrated-video-analytics/frontend
+### 3.2 Complete API Surface
 
-### 6.1 Core build and dev configuration
-- integrated-video-analytics/frontend/vite.config.ts
-  - Alias @ -> ./src
-  - Build outDir -> ../static_ui
-  - emptyOutDir true
-  - Dev server strictPort 5173
-  - Proxy /api -> http://localhost:8080
-  - Proxy /ws -> ws://localhost:8080 with ws enabled
+#### Camera / Video Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/cameras` | List mounted cameras with status |
+| POST | `/api/cameras/add` | Mount camera (requires `camera_id` + `source` params) |
+| DELETE | `/api/cameras/{camera_id}` | Unmount and stop camera pipeline |
+| POST | `/api/admin/cameras/remove-all` | Bulk remove all cameras (admin) |
+| POST | `/api/video/upload` | Upload video file, returns staged path |
+| POST | `/api/video/stage` | Stage uploaded file, returns resolved camera ID |
+| GET | `/api/video/stream/{camera_id}` | MJPEG stream with annotations |
+| GET/POST | `/api/video/profile` | Get/set stream quality profile (`low`/`balanced`/`high`) |
 
-### 6.2 Shared frontend runtime/API utilities
-Created files:
-- integrated-video-analytics/frontend/src/lib/config.ts
-  - Resolves API_URL and WS_URL from env or browser origin
-  - Supports optional API key env
-- integrated-video-analytics/frontend/src/lib/api.ts
-  - apiFetch() with status checks and JSON/text parsing
-  - apiUpload() helper for file/form uploads
-  - X-API-Key injection when configured
-- integrated-video-analytics/frontend/src/lib/utils.ts
-  - cn() helper via clsx + tailwind-merge
+#### Analytics & Records
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/analytics/status` | Pipeline status per camera |
+| GET | `/api/analytics/traffic` | Vehicle/person traffic over time |
+| GET | `/api/analytics/ocr` | Plate read statistics |
+| GET | `/api/analytics/summary` | Aggregate summary: counts, watchlist hits, gender/vehicle breakdowns, top plates |
+| GET | `/api/metrics` | Raw time-series metrics |
+| GET | `/api/records/plates` | Plate read history |
+| GET | `/api/records/vehicles` | Vehicle detection records |
+| GET | `/api/records/faces` | Face detection records (used by PersonsView) |
+| GET | `/api/logs/history` | Event log history |
+| GET | `/api/health` | System health check |
+| GET | `/api/system/stats` | CPU, RAM, GPU utilization via psutil/pynvml |
 
-### 6.3 Frontend code fixes and compatibility updates
-Implemented fixes:
-- Removed .tsx extension imports causing TS5097:
-  - src/App.tsx imports now extensionless
-  - src/main.tsx import now extensionless
-- Sidebar icon typing broadened for lucide compatibility:
-  - size prop now string | number
-- Analytics map callback typed to avoid implicit any.
-- Calendar updated for react-day-picker v9 API:
-  - replaced IconLeft/IconRight with Chevron component mapping.
-- Resizable wrappers updated for react-resizable-panels modern exports:
-  - PanelGroup -> Group
-  - PanelResizeHandle -> Separator
+#### Settings
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/api/settings/runtime` | Runtime config (confidence, intervals, etc.) |
+| GET/POST | `/api/settings/face-threshold` | Face match threshold (in-memory RUNTIME_SETTINGS) |
 
-### 6.4 Frontend dependency completion
-package.json dependencies now include previously missing UI packages:
-- Radix packages for accordion/alert-dialog/aspect-ratio/avatar/checkbox/collapsible/context-menu/dropdown-menu/hover-card/label/menubar/navigation-menu/progress/radio-group/scroll-area/select/separator/slider/switch/tabs/toggle/toggle-group
-- date-fns
-- react-day-picker
-- embla-carousel-react
-- cmdk
-- vaul
-- react-hook-form
-- input-otp
-- react-resizable-panels
-(and other existing dependencies retained)
+#### Admin
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/admin/events/clear` | Clear event log |
 
-### 6.5 Frontend production artifact output
-Generated directory:
-- integrated-video-analytics/static_ui
-Generated files verified:
-- integrated-video-analytics/static_ui/index.html
-- integrated-video-analytics/static_ui/assets/*
-- integrated-video-analytics/static_ui/favicon.ico
-- integrated-video-analytics/static_ui/placeholder.svg
-- integrated-video-analytics/static_ui/robots.txt
+#### Watchlist
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/watchlist/files` | List enrolled face image files |
+| POST | `/api/watchlist/files` | Upload face image to watchlist |
+| DELETE | `/api/watchlist/files` | Remove face image from watchlist |
 
-## 7) Reference UI copy updates (C-Shield-ref)
-Directory present in workspace:
-- C-Shield-ref/LovableUI/sentinel-command-main
+#### Export / Reports
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/export/maltego` | Maltego-format entity export |
+| GET | `/api/reports/download` | Generate and download PDF report (fpdf2) |
 
-Work completed in this copy to keep it buildable and aligned:
-- Installed dependencies (including vitest types and missing UI packages).
-- Added missing lib files:
-  - src/lib/config.ts
-  - src/lib/api.ts
-  - src/lib/utils.ts
-- Applied same TypeScript fixes as integrated frontend:
-  - src/App.tsx import extensions removed
-  - src/main.tsx import extension removed
-  - src/components/layout/Sidebar.tsx icon typing fix
-  - src/pages/Analytics.tsx callback typing fix
-  - src/components/ui/calendar.tsx API update for DayPicker
-  - src/components/ui/resizable.tsx API update for resizable-panels
-- Build verified passing in this copy after fixes.
+#### WebSocket
+| Endpoint | Description |
+|----------|-------------|
+| `WS /ws/analytics/{camera_id}` | Real-time analytics stream for active camera |
 
-## 8) Build/test verification timeline (important outcomes)
+#### OSINT / ReID (mounted from `osint_reid/api.py`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| WS | `/ws/state` | Live incident broadcast (admin-gated) |
+| GET | `/api/watchlist` | List all global identities with watchlist_flag=1 |
+| POST | `/api/watchlist` | Enroll new watchlist person (image upload + meta JSON) |
+| GET | `/api/watchlist/{global_id}` | Full identity profile + match history + incidents |
+| DELETE | `/api/watchlist/{global_id}` | Remove identity + snapshot cleanup |
+| GET | `/api/records/tracklets` | Recent tracklets list |
+| GET | `/api/osint/graph` | Entity graph: person + camera nodes, tracklet edges |
+| POST | `/api/tracklet/{tracklet_id}/enrich` | Trigger manual Gemini enrichment (admin) |
+| GET | `/api/incident/{incident_id}` | Incident details |
+| GET | `/api/metrics/worker_queue` | OSINT worker queue metrics |
+| GET | `/api/stream/snapshot/{global_id}/{ts}.jpg` | Subject snapshot image |
 
-### 8.1 Frontend build verification
-- integrated-video-analytics/frontend npm run build: PASS
-  - TypeScript passed
-  - Vite build produced static_ui output
-  - Non-blocking warnings remained about chunk size and dynamic/static mixed import behavior.
-- C-Shield-ref/LovableUI/sentinel-command-main npm run build: PASS
-  - After dependency and source fixes.
+---
 
-### 8.2 Backend test verification
-Observed in terminal history during this session window:
-- Multiple pytest runs in integrated-video-analytics virtual environment completed successfully.
-- Early failures encountered in some runs were environment/dependency related in non-venv contexts; later venv-based runs passed.
-- Additional targeted test runs (including pipeline and osint end-to-end) passed.
+## 4. ML Pipeline (`pipeline.py`)
 
-## 9) Environment and operational issues resolved during implementation
-- Disk space exhaustion (C: free space reached 0 GB) blocked npm install/build and destabilized local sqlite behavior.
-- Recovery actions performed:
-  - Removed partial frontend node_modules from interrupted install.
-  - Cleared npm cache.
-  - Rechecked disk status; regained sufficient free space to continue install/build.
+### 4.1 Shared Resources (singleton, lazy-loaded)
 
-## 10) Important items implemented that were not part of the original user wording
-These were implemented because they became required to make the integration actually work:
-- Added missing shared frontend lib layer in both integrated frontend and C-Shield-ref copy.
-- Added broad dependency set required by imported UI primitives/components.
-- Updated component APIs to match modern package versions (calendar/resizable) to clear TypeScript errors.
-- Added backend system telemetry endpoint and local env loader, improving observability and startup ergonomics.
-- Added adaptive-governor-linked control for expensive enrichment behavior (including Gemini gating) under runtime pressure.
-- Added rider proxy logic to better represent visible persons in motorcycle scenarios where no stable person box is matched.
+```
+SharedResources
+├── primary_detector      YOLO11s (yolo11s.pt) or env-override
+├── plate_detector        Custom YOLO (weights/best.pt or HuggingFace download)
+├── heavy_validator       YOLOv8x (optional, env-gated)
+├── rtdetr_validator      RT-DETR-L (optional, env-gated)
+├── ocr_reader            EasyOCR (fallback)
+├── ocr_paddle            PaddleOCR (preferred, use_textline_orientation=True)
+├── face_analyzer         InsightFace FaceAnalysis buffalo_l (optional)
+├── sahi_model            SAHI sliced detection wrapper (optional)
+└── reid_model            OSNet x0_25 imagenet (via torchreid)
+```
 
-## 11) Current repository state summary (at documentation update time)
-Tracked modified files (git status) include:
-- integrated-video-analytics/.env.example
-- integrated-video-analytics/main.py
-- integrated-video-analytics/osint_reid/reid_worker.py
-- integrated-video-analytics/osint_reid/tests/test_end_to_end.py
-- integrated-video-analytics/osint_reid/vehicle_classifier.py
-- integrated-video-analytics/pipeline.py
-- integrated-video-analytics/requirements.txt
-- integrated-video-analytics/templates/index.html
-- integrated-video-analytics/tests/test_pipeline.py
-Tracked deletions include:
-- integrated-video-analytics/osint_reid/ui_snippets/incident_rail.html
-- integrated-video-analytics/osint_reid/ui_snippets/watchlist_editor.html
-Untracked/new directories include:
-- integrated-video-analytics/frontend/
-- integrated-video-analytics/static_ui/
-- C-Shield-ref/
+All optional dependencies use `HAS_*` flags and degrade gracefully if not installed.
 
-## 12) Commands/outcomes directly relevant to this documentation update task
-- Verified changed files and stats with git status/diff.
-- Read and validated root README and integrated-video-analytics README.
-- Verified frontend package/vite/lib files for both integrated frontend and C-Shield-ref frontend.
-- Updated root README to include latest session changes and to reference this context file.
+### 4.2 Detection Pipeline (per frame, per camera)
 
-## 13) Documentation updates made now
-- Updated root README: added "Latest Session Update (Mar 2026)" section and TOC entry.
-- Created this file (context.md) as requested.
+```
+Frame (CV2 BGR)
+  │
+  ▼
+Primary YOLO Detection
+  ├── Classes: person(0), car(2), motorcycle(3), bus(5), truck(7)
+  ├── Confidence threshold: 0.20 (default)
+  └── Image size: 1024px
 
-## 14) Notes on completeness
-This document is exhaustive relative to:
-- Verified git-tracked deltas
-- Verified created frontend/lib/build artifacts in this session flow
-- Verified command outcomes captured in terminal context and tool outputs
+  │
+  ▼
+supervision ByteTrack Tracker
+  └── Assigns stable tracker IDs across frames
 
-If you want, this file can be further expanded into a per-file line-by-line migration ledger (with old vs new snippets for each touched function), but this current version already captures all implemented work at architectural, functional, dependency, and validation levels.
+  │
+  ├── PERSON PATH ──────────────────────────────────────────────
+  │   ├── Face detection via InsightFace (if HAS_INSIGHTFACE)
+  │   │   ├── Gender/age estimation
+  │   │   ├── 512D face embedding extraction
+  │   │   └── Watchlist cosine similarity matching (threshold: configurable, default 0.4)
+  │   ├── Rider proxy: motorcycles without matched person box counted as proxy person
+  │   ├── Zone counting (configurable polygon zones)
+  │   ├── Crowd density: Low/Medium/High by person_count thresholds
+  │   └── Face snapshot saved to snapshots/faces/
+  │
+  ├── VEHICLE PATH ─────────────────────────────────────────────
+  │   ├── Vehicle crop saved to snapshots/vehicles/
+  │   └── ANPR (triggered by PLATE_SCAN_INTERVAL_SECONDS = 2.0):
+  │       ├── Plate detector YOLO (confidence threshold: 0.50)
+  │       ├── Plate region crop (search window: 10%–95% of vehicle bbox height)
+  │       ├── Preprocessing variants:
+  │       │   gray, resized, clahe, sharpened, binary, contrast, sharpened-contrast
+  │       ├── PaddleOCR (cls=True then cls=False retry)
+  │       ├── EasyOCR fallback
+  │       ├── PlateVote TypedDict: aggregates OCR candidates with confidence scores
+  │       ├── normalize_plate_text(): enforces ^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{5,10}$
+  │       │   + Indian plate patterns (state code + format validation)
+  │       │   + OCR confusion correction (O↔0, I↔1, S↔5, B↔8, etc.)
+  │       └── Plate snapshot saved to snapshots/plates/
+  │
+  └── ADAPTIVE GOVERNOR ────────────────────────────────────────
+      Monitors CPU/GPU pressure and adjusts:
+      ├── plate_scan_interval_seconds
+      ├── plate_refresh_interval_seconds
+      ├── face_scan_interval_seconds
+      └── gemini_enabled (disabled under pressure)
+```
+
+### 4.3 Key Pipeline Constants (env-overridable)
+
+| Constant | Default | Purpose |
+|----------|---------|---------|
+| `DETECTION_CONFIDENCE` | 0.20 | YOLO detection threshold |
+| `DETECTION_IMAGE_SIZE` | 1024 | YOLO input resolution |
+| `PLATE_SCAN_INTERVAL_SECONDS` | 2.0 | How often to run ANPR |
+| `PLATE_REFRESH_INTERVAL_SECONDS` | 8.0 | Plate cache refresh |
+| `PLATE_CONFIDENCE` | 0.50 | Plate detector min confidence |
+| `PLATE_DIRECT_ACCEPT_CONFIDENCE` | 0.50 | Accept plate without voting |
+| `PLATE_MIN_AGGREGATE_SCORE` | 0.28 | Vote aggregation threshold |
+| `PLATE_CONFIRMATION_HITS` | 1 | Hits needed to confirm plate |
+| `FACE_MATCH_THRESHOLD` | 0.40 | Cosine threshold for watchlist match |
+| `LOCAL_OCR_MIN_CONFIDENCE` | 0.20 | EasyOCR minimum accepted score |
+| `PADDLE_PRIMARY_MIN_CONFIDENCE` | 0.60 | PaddleOCR minimum accepted score |
+
+---
+
+## 5. OSINT / ReID Subsystem (`osint_reid/`)
+
+### 5.1 Architecture Overview
+
+```
+Pipeline frame events
+        │
+        ▼
+  OSINTService.ingest_frame(camera_id, tracker_id, class_name, crops, face_crops, ...)
+        │
+        ├── TrackletBuffer (in-memory, per tracker_id per camera)
+        │   Accumulates: body crops, face crops, bbox history
+        │   Evicted after TRACKLET_IDLE_SECONDS = 2.5s inactivity
+        │   Min frames to persist: MIN_TRACKLET_FRAMES = 5
+        │   Max crops per tracklet: MAX_CROPS_PER_TRACKLET = 16
+        │
+        ▼
+  ThreadPoolExecutor (WORKER_POOL_SIZE = 4 threads)
+        │
+        ├── ReIDWorker.compute_reid_embeddings(body_crops)
+        │   └── OSNet x0_25 → 512D L2-normalised vector (avg across crops)
+        │
+        ├── ReIDWorker.compute_face_embeddings(face_crops)
+        │   └── InsightFace buffalo_l → 512D face vector (avg, conf-filtered)
+        │
+        ├── aggregation.aggregate_tracklet_payload()
+        │   └── Color histogram (HSV), bbox history JSON
+        │
+        └── OSINTDB.insert_tracklet(...)
+                │
+                ▼
+        CrossCameraMatcher.match_tracklet(...)
+                │
+                ├── Loads all global_identities from DB
+                ├── Fused score = 0.60 × face_cosine + 0.30 × reid_cosine
+                │              + 0.05 × color_score + 0.05 × plausibility
+                ├── Thresholds:
+                │   FACE_LINK_TH = 0.45, REID_LINK_TH = 0.65, FUSED_LINK_TH = 0.70
+                │   AMBIGUITY_LOWER = 0.50 (rejects ambiguous matches)
+                ├── Match found → links tracklet to existing global_identity
+                └── No match → creates new global_identity
+                        │
+                        ▼
+                Watchlist check: if global_identity.watchlist_flag = 1
+                        └── Creates identity_incident + broadcasts to /ws/state
+```
+
+### 5.2 Database Schema (`analytics.db` — SQLite WAL mode)
+
+**Table: `tracklets`**
+```sql
+tracklet_id              TEXT PRIMARY KEY
+camera_id                TEXT
+start_ts                 TEXT (ISO 8601 UTC)
+end_ts                   TEXT
+frame_count              INTEGER
+aggregated_reid          BLOB  (float32 array, pickled)
+aggregated_face          BLOB  (float32 array, pickled)
+color_histogram          BLOB  (pickled)
+bbox_history             TEXT  (JSON list of [x1,y1,x2,y2,ts])
+plate_assoc              TEXT  (linked plate text if vehicle tracklet)
+resolved_global_id       TEXT  (FK → global_identities)
+enrichment_started_at    TEXT
+enrichment_completed_at  TEXT
+last_updated             TEXT
+```
+
+**Table: `global_identities`**
+```sql
+global_id          TEXT PRIMARY KEY  (gid_{12 hex chars})
+created_at         TEXT
+last_seen_ts       TEXT
+last_seen_camera   TEXT
+face_embedding     BLOB  (float32)
+reid_embedding     BLOB  (float32)
+watchlist_flag     INTEGER (0/1)
+watchlist_meta     TEXT  (JSON: full_name, dob, nationality, phone, email,
+                           last_known_address, vehicle_reg, vehicle_desc,
+                           threat_level, notes, snapshot_filename)
+confidence         REAL
+```
+
+**Table: `identity_incidents`**
+```sql
+incident_id           TEXT PRIMARY KEY  (uuid4)
+tracklet_id           TEXT
+candidate_global_id   TEXT
+reason                TEXT
+score                 REAL
+created_at            TEXT
+resolved              INTEGER (0/1)
+operator_action       TEXT
+```
+
+**Table: `vehicles`**
+```sql
+vehicle_id            TEXT PRIMARY KEY
+tracklet_id           TEXT
+first_seen_ts         TEXT
+last_seen_ts          TEXT
+camera_id             TEXT
+make_model            TEXT
+make_model_confidence REAL
+color                 TEXT
+color_confidence      REAL
+```
+
+**Analytics DB tables** (managed by `database.py`, separate connection):
+- `events` — event_type, detail, camera_id, timestamp
+- `metrics` — vehicle_count, people_count, zone_count, stream_fps, etc.
+- `face_records` — tracker_id, camera_id, identity, gender, age, watchlist_hit, first_seen, last_seen
+- `plate_reads` — plate_text, camera_id, confidence, timestamp
+- `vehicle_records` — vehicle class, camera_id, timestamp
+
+### 5.3 OSINT Configuration (env-overridable, `osint_reid/config.py`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MIN_TRACKLET_FRAMES` | 5 | Min frames before tracklet is persisted |
+| `FACE_CONF_THRESHOLD` | 0.60 | Min InsightFace detection confidence |
+| `FACE_LINK_TH` | 0.45 | Cosine threshold to link on face alone |
+| `REID_LINK_TH` | 0.65 | Cosine threshold to link on ReID alone |
+| `FUSED_LINK_TH` | 0.70 | Fused score threshold to link |
+| `AMBIGUITY_LOWER` | 0.50 | Reject if second-best candidate within this margin |
+| `REID_MODEL` | `osnet_x0_25` | OSNet variant |
+| `WORKER_POOL_SIZE` | 4 | ThreadPoolExecutor workers |
+| `TRACKLET_IDLE_SECONDS` | 2.5 | Seconds of inactivity before tracklet is flushed |
+| `MAX_CROPS_PER_TRACKLET` | 16 | Max body crops stored per tracklet |
+| `OSINT_DB_PATH` | `analytics.db` | SQLite DB path |
+
+---
+
+## 6. Frontend Architecture
+
+### 6.1 Build & Dev
+
+- **Framework:** React 18 + TypeScript + Vite
+- **Styling:** Tailwind CSS + custom CSS variables (dark theme, `--primary`, `--status-alert`, etc.)
+- **Component library:** shadcn/ui (Radix primitives)
+- **Build output:** `static_ui/` (served directly by FastAPI)
+- **Dev proxy:** Vite proxies `/api` → `http://localhost:8080`, `/ws` → `ws://localhost:8080`
+- **Build command:** `cd frontend && npm run build`
+
+### 6.2 State Management
+
+Global state flows through `pages/Index.tsx`:
+
+```
+Index.tsx
+  ├── cameras: string[]            ← Camera ID list from /api/cameras
+  ├── activeCamera: string         ← Currently selected camera
+  ├── activeView: ViewType         ← live | analytics | watchlist | osint | weapons | persons | settings
+  ├── state: CyberShieldState      ← Live data from WebSocket
+  ├── alertHistory: any[]          ← Watchlist alert events
+  └── useBackendStream(activeCamera) → WebSocket /ws/analytics/{id}
+        └── Merges incoming JSON into CyberShieldState via setState(p => ({...p, ...wsData}))
+```
+
+`CyberShieldState` fields (streamed per-frame from backend):
+```typescript
+vehicle_count, people_count, stream_fps, analytics_fps,
+inference_latency_ms, crowd_density, is_processing,
+vehicle_types, vehicle_current_types, gender_stats,
+recent_plates, pending_plates, recent_faces, recent_vehicles,
+event_logs, system_health, zone_count,
+plate_detector_ready, device, stream_profile,
+detection_confidence, plate_confidence, face_match_threshold,
+faces_detected, plates_detected, people_total_count
+```
+
+### 6.3 Views
+
+| View | Route key | Data source |
+|------|-----------|-------------|
+| LiveView | `live` | MJPEG stream `/api/video/stream/{id}`, WS analytics |
+| Analytics | `analytics` | `/api/analytics/*`, `/api/metrics`, `/api/records/*` |
+| WatchlistView | `watchlist` | `/api/watchlist`, `/api/records/faces` |
+| OSINTView | `osint` | `/api/osint/graph`, `/api/records/tracklets`, `/api/metrics/worker_queue`, `WS /ws/state` |
+| WeaponsView | `weapons` | `/api/events?event_type=weapon` with regex fallback |
+| PersonsView | `persons` | `/api/records/faces?limit=200` (polls every 8s) |
+| SettingsView | `settings` | `/api/settings/runtime`, `/api/settings/face-threshold` |
+
+### 6.4 Camera Grid Layout
+
+`CameraGrid` computes layout based on `cameras.length + 1` (including ADD FEED placeholder):
+
+| Total cells | Columns | Rows |
+|-------------|---------|------|
+| 1 | 1 | 1 |
+| 2 | 2 | 1 |
+| 3–4 | 2 | 2 |
+| 5–6 | 3 | 2 |
+| 7–9 | 3 | 3 |
+| 10+ | 4 | ceil(n/4) |
+
+`CameraCell` uses `style={{ minHeight: 0 }}` (not `aspectRatio`) so cells fill `1fr` grid rows exactly. Image uses `object-cover`.
+
+### 6.5 OSINT View Architecture
+
+```
+OSINTView
+  ├── loadData() → parallel fetch:
+  │   ├── /api/osint/graph    → GraphData {nodes[], edges[]}
+  │   ├── /api/records/tracklets → tracklets[]
+  │   └── /api/metrics/worker_queue → queue stats
+  │
+  ├── WebSocket /ws/state → live incident push → incidents[]
+  │
+  ├── KPI Row: Watchlisted | Cameras | Tracklets | Incidents
+  │
+  ├── EntityGraph (SVG W=720 H=420)
+  │   ├── layoutNodes(): persons in horizontal row (H/2), cameras in arc above
+  │   ├── Person nodes: ellipse with threat color (HIGH=red, MEDIUM=amber, LOW=green)
+  │   ├── Camera nodes: circles
+  │   ├── Edges: dashed lines with arrowhead marker, timestamp + frame_count labels
+  │   └── onClick → setSelectedNode (drives ProfilePanel)
+  │
+  ├── ProfilePanel (280px right column)
+  │   ├── Subject snapshot image (/api/stream/snapshot/{gid}/{ts}.jpg)
+  │   ├── Global ID, threat level badge
+  │   ├── Meta fields: full_name, dob, nationality, phone, email,
+  │   │               last_known_address, vehicle_reg, vehicle_desc, notes
+  │   └── Camera sightings: tracklet_id, start→end time, frame count
+  │
+  └── Recent Tracklets table + Live Incidents feed
+```
+
+### 6.6 Demo Sequence (AddFeedModal)
+
+Three-video parallel staging flow:
+1. User uploads 3 video files in the Demo tab (pre-filled: camera_1/2/3, delays 0/5/10s)
+2. All 3 files staged in parallel via `POST /api/video/stage`
+3. On success: modal closes immediately, live view shown
+4. Cameras mount in background with staggered `setTimeout(delay * 1000)`
+5. Each mount: `POST /api/cameras/add?camera_id=camera_N&source=<staged_path>`
+6. `window.dispatchEvent(new CustomEvent("cameras-updated"))` triggers camera list refresh
+
+---
+
+## 7. Optional ML Integrations
+
+| Package | Feature | Fallback behaviour |
+|---------|---------|-------------------|
+| `insightface` | Face detection, embeddings, gender/age | Face features disabled; face_model=None |
+| `paddleocr` | Primary OCR engine for ANPR | Falls back to EasyOCR only |
+| `easyocr` | Secondary OCR engine | ANPR disabled if neither available |
+| `torchreid` | OSNet ReID embeddings | ReID disabled; reid_model=None |
+| `transformers` | Stanford Cars vehicle classifier | Vehicle classification disabled |
+| `sahi` | Sliced inference for small objects | Standard YOLO inference only |
+| `google.generativeai` | Gemini tracklet enrichment | Enrichment disabled |
+| `pynvml` | GPU metrics | GPU stats omitted from system health |
+
+---
+
+## 8. Authentication
+
+`auth.py` provides two helpers:
+- `ensure_admin_request(request)` — checks `Authorization: Bearer <token>` or `X-API-Key` header or `?api_key=` query param against `ADMIN_API_TOKEN` env var
+- `ensure_admin_websocket(ws)` — same check for WebSocket connections
+
+If `ADMIN_API_TOKEN` is empty/unset, all admin checks pass (open mode). Most read endpoints are unauthenticated. Admin-gated endpoints: `/ws/state`, `/api/tracklet/*/enrich`, camera remove-all, events clear.
+
+---
+
+## 9. Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ADMIN_API_TOKEN` | `""` | Admin auth token (empty = open) |
+| `CYBERSHIELD_WS_INTERVAL` | `1.0` | WebSocket push interval (seconds) |
+| `CYBERSHIELD_DETECTOR_MODEL` | `yolo11s.pt` | Primary YOLO model path |
+| `ANPR_MODE` | `local` | `local` or `cloud` (cloud uses Gemini Vision) |
+| `GEMINI_API_KEY` | — | Google Gemini API key |
+| `MIN_TRACKLET_FRAMES` | `5` | OSINT min frames threshold |
+| `FACE_LINK_TH` | `0.45` | Face cosine link threshold |
+| `REID_LINK_TH` | `0.65` | ReID cosine link threshold |
+| `FUSED_LINK_TH` | `0.70` | Fused score link threshold |
+| `WORKER_POOL_SIZE` | `4` | OSINT worker threads |
+| `TRACKLET_IDLE_SECONDS` | `2.5` | Tracklet flush timeout |
+| `ENABLE_SAHI` | `true` | Enable SAHI sliced inference |
+| `ENABLE_RTDETR_VALIDATOR` | `true` | Enable RT-DETR validation pass |
+| `CAMERA_GRAPH_PATH` | `config/camera_graph.json` | Camera topology file |
+
+---
+
+## 10. Startup & Runtime
+
+```bash
+# Start server
+cd integrated-video-analytics
+py -m uvicorn main:app --host 0.0.0.0 --port 8080
+
+# Build frontend
+cd integrated-video-analytics/frontend
+npm run build
+# Output: ../static_ui/assets/index-GIURsKmK.js + index-DegkAA9L.css
+
+# Seed OSINT demo data (Marcus J. Webb)
+py seed_osint.py
+```
+
+Server runs at `http://localhost:8080`. Frontend is served from `static_ui/`.
+
+**Model loading sequence on first camera add:**
+1. `warm_shared_resources()` pre-loads primary YOLO detector
+2. First `POST /api/cameras/add` triggers `CameraRuntime` which spins up `VideoPipeline` thread
+3. Pipeline loads plate detector, OCR engines, InsightFace, OSNet lazily on first use
+4. OSINT service initialises on first OSINT API call via `get_osint_service()` singleton
+
+---
+
+## 11. Known Gaps & Future Work
+
+| Area | Gap | Notes |
+|------|-----|-------|
+| Weapons detection | No weapon-class YOLO model | `WeaponsView` polls events but `yolo11s` has no weapon classes; events will be empty without a finetuned model |
+| Live graph refresh | OSINT graph is static (manual refresh only) | Should poll `/api/osint/graph` every 15s or subscribe to `/ws/state` |
+| Per-cell analytics | Only `activeCamera` gets live stats over WebSocket | Other grid cells show stale counts |
+| Movement timeline | No chronological subject movement view | Camera sightings in ProfilePanel are listed but not visualised as timeline |
+| Enrichment UI | Tracklet enrichment result never surfaced | `/api/tracklet/{id}/enrich` submits job but result stored silently |
+| Plate history search | No historical plate lookup UI | Data is in DB; no search interface |
+| Authentication | Most read endpoints unauthenticated | Fine for local deployment; needs hardening for network exposure |
+| Snapshot in ProfilePanel | Shows blank if InsightFace not installed | No fallback silhouette |
+
+---
+
+## 12. Commit History (key milestones)
+
+| Hash | Summary |
+|------|---------|
+| `af84bbd4` | OSINT graph endpoint, Weapons/Persons views, camera grid fix, demo sequence |
+| `cc935ab4` | Enhanced ANPR cloud-primary mode, state validation, snapshot storage |
+| `def801b9` | ANPR logic refinement, TypedDict for votes, scan interval optimisation |
+| `7a523a2d` | UI refresh, ANPR optimisation, technical audit |
+| `232178fd` | OSINT/ReID subsystem: cross-camera identity, vehicle classification, migrations, API, tests |
+| `db3d3b42` | Vehicle recall defaults, model path cleanup |
+| `5afa04af` | Root README documentation |
+| `fa658dde` | Production hardening: operator UI, ANPR quality gates, repo cleanup |
